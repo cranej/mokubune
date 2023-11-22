@@ -9,4 +9,4 @@
   :serial t
   :components ((:file "packages")
                (:file "mokubune"))
-  :depends-on ("alexandria" "str" "pathnames" "cl-ppcre"))
+  :depends-on ("alexandria" "str" "pathnames" "cl-ppcre" "cl-template"))

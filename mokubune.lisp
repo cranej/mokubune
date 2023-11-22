@@ -81,10 +81,10 @@
 
 (defun template-file-locations (source)
   (let* ((source (abs-src source))
-         (filename (file-namestring source))
+         (filename (pathname-name source))
          (template-file-name
-           (if (or (string-equal filename "")
-                   (string-equal filename "index.gmi")) ;; TODO: configurable
+           (if (or (null filename)
+                   (string-equal filename "index")) ;; TODO: configurable
                *index-template-file*
                *page-template-file*)))
     (values
@@ -95,7 +95,7 @@
   (let* ((source (abs-src source))
         (target (abs-target (rel-src source))))
     (if (directory-pathname-p target)
-        (merge-pathnames "index.gmi" target)
+        (merge-pathnames "index.gmi" target) ;; TODO: configurable
         target)))
 
 (defun set-extension (target extension)
@@ -121,7 +121,7 @@
                 do
                    (setf read-title nil)
                    (when (str:starts-with? "#" line)
-                     (setf title (str:trim-left line :char-bag "# ")))))
+                     (setf title (str:trim-left line :char-bag '(#\# #\Space))))))
         title))))
 
 (defun parse-page (source-file target-file)
@@ -133,10 +133,10 @@
          (body-title (and source-file (read-body-and-title (abs-src source-file))))
          (url (rel-target target-file)))
     (make-instance 'page
-                   :title (second body-title)
+                   :title (or (second body-title) "")
                    :url url
-                   :date date
-                   :body (first body-title))))
+                   :date  (or date "unknown")
+                   :body (or (first body-title) ""))))
 
 ;;;; Tree like structure of entities that needs to process
 ;;; op - (:action action :target target-file-path :source source-file-path :template template-file-path)
@@ -148,10 +148,10 @@
   (setf *root-entity* (list :name "" :op nil :ctx nil :files nil :dirs nil)))
 
 (defun find-entity (path &optional (root *root-entity*))
-  (if (string= path "")
+  (if (string= (namestring path) "")
       (and (string= (getf root :name) "") root)
       
-      (let ((parent (find-parent path root))
+      (let ((parent (find-parent-entity path root))
 	    (name (if (directory-pathname-p path)
 		      (car (last (pathname-directory path)))
 		      (file-namestring path)))
@@ -166,13 +166,13 @@
 (defun make-file-entity (path op contex)
   (list :name (file-namestring path) :op op :ctx contex))
 
-;;; All properties have to be set even the values are nil - need this to make sure we can updating the nested entity returned by find-parent
+;;; All properties have to be set even the values are nil - need this to make sure we can updating the nested entity returned by find-parent-entity
 (defun make-dir-entity (path &key op context files dirs)
   (let* ((path-dir (pathname-directory path))
 	 (name (if (null path-dir) "" (car (last path-dir)))))
     (list :name name :op op :ctx context :files files :dirs dirs)))
 
-(defun find-parent (path root-entity)
+(defun find-parent-entity (path root-entity)
   (let ((dirs (cdr (pathname-directory path))))
     (when (directory-pathname-p path)
       (setf dirs (butlast dirs)))
@@ -191,23 +191,22 @@
   (push entity (getf parent (if dir? :dirs :files))))
 
 ;;;; walk content directory and build the root entity structure
-(defun build-entity ()
-  (reset-root)
-  (walk-directory *content-directory* #'build-ops :directories t)
-  *root-entity*)
+(defun scan-entities ()
+  (flet ((scan (source)
+	  (if (directory-p source)
+	      (build-dir-entity source)
+	      (when (string/= (pathname-name source) "index")
+		(build-file-entity source)))))
+    (reset-root)
+    (walk-directory *content-directory* #'scan :directories t)
+    *root-entity*))
 
-(defun build-ops (source)
-  (if (directory-p source)
-      (build-dir source)
-      (when (string/= (pathname-name source) "index")
-	(build-file source))))
-
-(defun build-dir (source)
+(defun build-dir-entity (source)
   (let* ((source (rel-src source))
 	 (is-root (string= source ""))
          (index-source (file-exists-p (abs-src (merge-pathnames "index.gmi" source))))
          (tpl (find-template source :fallback (or is-root index-source)))
-	 (parent (find-parent source *root-entity*)))
+	 (parent (find-parent-entity source *root-entity*)))
     (unless parent
       (error "Unable to find parent for ~a" source))
     (if tpl
@@ -228,14 +227,14 @@
 	(unless is-root
 	  (insert-entity (make-dir-entity source) parent :dir? t)))))
 
-(defun build-file (source)
+(defun build-file-entity (source)
   (let* ((source (rel-src source))
 	 (target (rel-target (find-target source)))
 	 (matched
            (find-if #'(lambda (r) (match-pattern (first r) source))
 		    *rules*)))
     (when matched
-      (let ((parent (find-parent target *root-entity*)))
+      (let ((parent (find-parent-entity target *root-entity*)))
 	(unless parent
 	  (error "Unable to find parent of ~a~%" target))
 	(case (second matched)
@@ -255,6 +254,82 @@
 				  (parse-page source target))
 		parent)))))))))
 
+;;;; process entity
+(defun process-entities (&optional (root *root-entity*))
+  (process-op (getf root :op) :dir? t)
+  (dolist (file (getf root :files))
+    (process-op (getf file :op)))
+  (dolist (dir (getf root :dirs))
+    (process-entities dir)))
+
+(defun process-op (op &key dir?)
+  (when op
+    (case (getf op :action)
+      (:copy
+       (let ((source (getf op :source))
+	     (target (getf op :target)))
+	 (if (deps-newer-p (abs-target target)
+			   (abs-src source))
+	     (progn
+	       (copy-file (abs-src source) (abs-target target))
+	       (format t "target: ~a:  copy from ~a~%" target source))
+	     (format t "target: ~a skipped due to updated~%" target))))
+      (:apply-template
+       (let* ((source (getf op :source))
+	      (target (getf op :target))
+	      (tpl (getf op :template))
+	      (deps (list (abs-tpl tpl))))
+	 (when source (push (abs-src source) deps))
+	 ;; TODO: index should be updated if any child re-generated...
+	 (if (apply #'deps-newer-p (abs-target target) deps)
+	     (progn
+	       (apply-template target tpl :dir? dir?)
+	       (format t "target: ~a: apply template ~a to ~a~%" target tpl source))
+	     (format t "target: ~a skipped due to updated~%" target)))))))
+
+(defun apply-template (target template &key dir?)
+  (let* ((target-rel (rel-target target))
+	 (target-abs (abs-target target))
+	 (entity (find-entity (if dir? (directory-namestring target-rel) target-rel))))
+    (with-open-file (stream target-abs
+			    :element-type 'character
+			    :direction :output
+			    :if-exists :supersede)
+      (write-string
+       ;; It's wired that if template contains emoji, there will be an extra #\Nul
+       ;; appended to output string. Which cause emacs cannot display the text properly
+       (string-trim
+	'(#\Nul)
+	(funcall (compile-template template)
+		 (list :page (getf entity :ctx)
+		       :page-parent (parent-url target-rel :dir? dir?)
+		       :children (mapcar #'(lambda (e) (getf e :ctx))
+					 (getf entity :files)))))
+       stream))))
+
+(defun parent-url (target &key dir?)
+  (if dir?
+      (format nil "/~@[~{~a/~}~]" (butlast (cdr (pathname-directory target))))
+      (format nil "/~a" (directory-namestring target))))
+
+(defun deps-newer-p (target &rest deps)
+  (if (file-exists-p target)
+      (let ((target-write-date (file-write-date target)))
+	(some #'(lambda (file) (>= (file-write-date file) target-write-date))
+	      deps))
+      t))
+
+(defparameter *compiled-templates* (make-hash-table :test #'equal))
+(defun compile-template (tpl)
+  (let ((key (format nil "~a-~a" (rel-tpl tpl)
+		     (or (file-write-date (abs-tpl tpl)) ""))))
+    (or (gethash key *compiled-templates*)
+	(setf (gethash key *compiled-templates*)
+	      (with-open-file (stream (abs-tpl tpl))
+		(let ((template (make-string (file-length stream))))
+		  (read-sequence template stream)
+		  (cl-template:compile-template template)))))))
+
 ;;;; Utilities to deal with path
 (defun rel-src (path)
   (enough-namestring path *content-directory*))
@@ -270,3 +345,4 @@
   (enough-namestring path *target-directory*))
 (defun abs-target (path)
   (merge-pathnames path *target-directory*))
+
