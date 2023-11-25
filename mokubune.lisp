@@ -12,6 +12,7 @@
 (defvar *target-directory* (absolute-path #p"public/"))
 (defparameter *page-template-file* "page.clt")
 (defparameter *index-template-file* "index.clt")
+(defvar *verbose* nil)
 
 (defun set-directories (cwd)
   (setf *cwd* cwd)
@@ -223,10 +224,8 @@
 	      (progn
 		(setf (getf parent :op) op)
 		(setf (getf parent :ctx) context))
-	      
 	      (insert-entity (make-dir-entity source :op op :context context)
 			     parent :dir? t)))
-	
 	(unless is-root
 	  (insert-entity (make-dir-entity source) parent :dir? t)))))
 
@@ -270,37 +269,46 @@
       (setf children-out-dated t))
     children-out-dated))
 
+
+(defmacro process-target (target &key if-any do log)
+  (flet ((if-form (form)
+	   (cond ((atom form) form)
+		 ((eq :deps (car form))
+		  `(apply #'deps-newer-p (abs-target ,target) ,@(cdr form)))
+		 (t `(,@form)))))
+    (destructuring-bind (act-fn &rest args) do
+      `(if (or ,@(mapcar #'if-form if-any))
+	   (progn
+	     (,act-fn ,@args)
+	     ,@(if log
+		   (list `(when *verbose* (format t ,@log))))
+	     t)
+	   (progn
+	     (when *verbose* (format t "Skip ~a~%" ,target))
+	     nil)))))
+
 (defun process-op (op &key dir? children-out-dated)
   (when op
     (ecase (getf op :action)
       (:copy
        (let ((source (getf op :source))
 	     (target (getf op :target)))
-	 (if (or children-out-dated
-		 (deps-newer-p (abs-target target)
-			       (abs-src source)))
-	     (progn
-	       (copy-file (abs-src source) (abs-target target))
-	       (format t "target: ~a:  copy from ~a~%" target source)
-	       t)
-	     (progn
-	       (format t "target: ~a skipped due to updated~%" target)
-	       nil))))
+	 (process-target
+	  target
+	  :if-any (children-out-dated (:deps (abs-src source)))
+	  :do (copy-file (abs-src source) (abs-target target))
+	  :log ("Target: ~a:  copied from ~a~%" target source))))
       (:apply-template
        (let* ((source (getf op :source))
 	      (target (getf op :target))
 	      (tpl (getf op :template))
 	      (deps (list (abs-tpl tpl))))
 	 (when source (push (abs-src source) deps))
-	 (if (or children-out-dated
-		 (apply #'deps-newer-p (abs-target target) deps))
-	     (progn
-	       (apply-template target tpl :dir? dir?)
-	       (format t "target: ~a: apply template ~a to ~a~%" target tpl source)
-	       t)
-	     (progn
-	       (format t "target: ~a skipped due to updated~%" target)
-	       nil)))))))
+	 (process-target
+	  target
+	  :if-any (children-out-dated (:deps deps))
+	  :do (apply-template target tpl :dir? dir?)
+	  :log ("Target: ~a: applied template ~a to ~a~%" target tpl source)))))))
 
 (defun apply-template (target template &key dir?)
   (let* ((target-rel (rel-target target))
