@@ -190,13 +190,16 @@
 (defun insert-entity (entity parent &key dir?)
   (push entity (getf parent (if dir? :dirs :files))))
 
-;;;; walk content directory and build the root entity structure
+;;;; Walk content directory and build the root entity structure.
+;;;; Scanning and processing could be done in one-pass, with a modified
+;;;; walk-directory logic instead of pathnames system's, but performance
+;;;; is not a concern here, so don't brother it.
 (defun scan-entities ()
   (flet ((scan (source)
-	  (if (directory-p source)
-	      (build-dir-entity source)
-	      (when (string/= (pathname-name source) "index")
-		(build-file-entity source)))))
+	   (if (directory-p source)
+	       (build-dir-entity source)
+	       (when (string/= (pathname-name source) "index")
+		 (build-file-entity source)))))
     (reset-root)
     (walk-directory *content-directory* #'scan :directories t)
     *root-entity*))
@@ -254,38 +257,50 @@
 				  (parse-page source target))
 		parent)))))))))
 
-;;;; process entity
+;;;; process entity - a post-order traverse
 (defun process-entities (&optional (root *root-entity*))
-  (process-op (getf root :op) :dir? t)
-  (dolist (file (getf root :files))
-    (process-op (getf file :op)))
-  (dolist (dir (getf root :dirs))
-    (process-entities dir)))
+  (let ((children-out-dated nil))
+    (dolist (file (getf root :files))
+      (when (process-op (getf file :op))
+	(setf children-out-dated t)))
+    (dolist (dir (getf root :dirs))
+      (when (process-entities dir)
+	(setf children-out-dated t)))
+    (when (process-op (getf root :op) :dir? t :children-out-dated children-out-dated)
+      (setf children-out-dated t))
+    children-out-dated))
 
-(defun process-op (op &key dir?)
+(defun process-op (op &key dir? children-out-dated)
   (when op
-    (case (getf op :action)
+    (ecase (getf op :action)
       (:copy
        (let ((source (getf op :source))
 	     (target (getf op :target)))
-	 (if (deps-newer-p (abs-target target)
-			   (abs-src source))
+	 (if (or children-out-dated
+		 (deps-newer-p (abs-target target)
+			       (abs-src source)))
 	     (progn
 	       (copy-file (abs-src source) (abs-target target))
-	       (format t "target: ~a:  copy from ~a~%" target source))
-	     (format t "target: ~a skipped due to updated~%" target))))
+	       (format t "target: ~a:  copy from ~a~%" target source)
+	       t)
+	     (progn
+	       (format t "target: ~a skipped due to updated~%" target)
+	       nil))))
       (:apply-template
        (let* ((source (getf op :source))
 	      (target (getf op :target))
 	      (tpl (getf op :template))
 	      (deps (list (abs-tpl tpl))))
 	 (when source (push (abs-src source) deps))
-	 ;; TODO: index should be updated if any child re-generated...
-	 (if (apply #'deps-newer-p (abs-target target) deps)
+	 (if (or children-out-dated
+		 (apply #'deps-newer-p (abs-target target) deps))
 	     (progn
 	       (apply-template target tpl :dir? dir?)
-	       (format t "target: ~a: apply template ~a to ~a~%" target tpl source))
-	     (format t "target: ~a skipped due to updated~%" target)))))))
+	       (format t "target: ~a: apply template ~a to ~a~%" target tpl source)
+	       t)
+	     (progn
+	       (format t "target: ~a skipped due to updated~%" target)
+	       nil)))))))
 
 (defun apply-template (target template &key dir?)
   (let* ((target-rel (rel-target target))
