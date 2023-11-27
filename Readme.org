@@ -1,0 +1,27 @@
+* mokubune
+
+A blog generation program, try to be as intuitive as possible:
++ Try to be intuitive when selecting template file to apply. I found some other similar programs have very confusing template selecting logic.
++ Don't regenerate pages that has no change on it's dependencies. This is one of the reasons I write this program - the tool I currently use regenerates everything each time, which is inconvenience when for example publishing site via =rsync=.
+** Template Selection
+*** Root index page
+Root index page is the index page at your site's root.
++ Always use template file "templates/index.clt".
++ If there is no such file, root index page will not be generated.
+*** Index page of sub directories
+Index page will be generated for sub directoies if there is a template file which is "applicable". 
+
+If there is a content file =index.gmi= under the corresponding content sub directory, the first exists file at the following locations will be used:
++ templates/<sub directory>/index.clt
++ templates/sub-index.clt
++ templates/index.clt
+
+If there is no content file exists, index page will be generated only when the following template file exists:
++ templates/<sub directory>/index.clt
+*** Regular page
+All files under content directory other than =index= files are treated as regular pages. The first exists template file at the following locations will be used:
++ templates/<corresponding sub directories>/page.clt
++ templates/page.clt
+
+For example, for page =contents/sub1/post-123.gmi=, if =templates/sub1/page.clt= exists, it will be used. Otherwise use =templates/page.clt=.
+

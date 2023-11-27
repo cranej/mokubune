@@ -12,6 +12,7 @@
 (defvar *target-directory* (absolute-path #p"public/"))
 (defparameter *page-template-file* "page.clt")
 (defparameter *index-template-file* "index.clt")
+(defparameter *sub-index-template-file* "sub-index.clt")
 (defvar *verbose* nil)
 
 (defun set-directories (cwd)
@@ -76,25 +77,28 @@
 
 ;;; Functions for locating template, target, etc.
 (defun find-template (source &key (fallback t))
-  (multiple-value-bind (specific default) (template-file-locations source)
-    (or (file-exists-p specific)
-        (and fallback (file-exists-p default)))))
+  (let ((locations (template-file-locations source)))
+    (if fallback
+	(find-if #'file-exists-p locations)
+	(file-exists-p (first locations)))))
 
 (defun template-file-locations (source)
-  (let* ((source (abs-src source))
-         (filename (pathname-name source))
-         (template-file-name
-           (if (or (null filename)
-                   (string-equal filename "index")) ;; TODO: configurable
-               *index-template-file*
-               *page-template-file*)))
-    (values
-     (merge-pathnames template-file-name (abs-tpl (rel-src source)))
-     (abs-tpl template-file-name))))
+  (labels ((what-path (source)
+	     (cond ((string= source "") :root-dir)
+		   ((directory-pathname-p source) :sub-dir)
+		   (t :page))	     ))
+    (let ((source (rel-src source)))
+      (ecase (what-path source)
+	(:root-dir (list (abs-tpl *index-template-file*)))
+	(:sub-dir (list (merge-pathnames *index-template-file* (abs-tpl source))
+			(abs-tpl *sub-index-template-file*)
+			(abs-tpl *index-template-file*)))
+	(:page (list (merge-pathnames *page-template-file* (abs-tpl source))
+		     (abs-tpl *page-template-file*)))))))
 
 (defun find-target (source)
   (let* ((source (abs-src source))
-        (target (abs-target (rel-src source))))
+         (target (abs-target (rel-src source))))
     (if (directory-pathname-p target)
         (merge-pathnames "index.gmi" target) ;; TODO: configurable
         target)))
@@ -208,8 +212,9 @@
 (defun build-dir-entity (source)
   (let* ((source (rel-src source))
 	 (is-root (string= source ""))
+	 ;; TODO: index file extension should be configurable
          (index-source (file-exists-p (abs-src (merge-pathnames "index.gmi" source))))
-         (tpl (find-template source :fallback (or is-root index-source)))
+         (tpl (find-template source :fallback index-source))
 	 (parent (find-parent-entity source *root-entity*)))
     (unless parent
       (error "Unable to find parent for ~a" source))
