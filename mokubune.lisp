@@ -2,24 +2,38 @@
 
 ;;;; Define global environments
 (defparameter *cwd* (uiop/os:getcwd))
+(defun set-working-directory (wd)
+  (setf *cwd* wd))
 
-(defun absolute-path (path)
+(defun abs-cwd (path)
   (merge-pathnames path *cwd*))
 
-(defvar *site-title* "A personal blog")
-(defvar *template-directory* (absolute-path #p"templates/"))
-(defvar *content-directory* (absolute-path #p"contents/"))
-(defvar *target-directory* (absolute-path #p"public/"))
 (defparameter *page-template-file* "page.clt")
 (defparameter *index-template-file* "index.clt")
 (defparameter *sub-index-template-file* "sub-index.clt")
-(defvar *verbose* nil)
 
-(defun set-directories (cwd)
-  (setf *cwd* cwd)
-  (setf *template-directory* (absolute-path #p"templates/"))
-  (setf *content-directory* (absolute-path #p"contents/"))
-  (setf *target-directory* (absolute-path #p"public/")))
+(defstruct site
+  (title "My brilliant writes" :type string)
+  (content-dir "contents/" :type string)
+  (template-dir "templates/" :type string)
+  (output-dir "public/" :type string)
+  (base-url "" :type string)
+  (data (make-hash-table :test 'equal)))
+
+(defvar *site* (make-site))
+(defmacro config (slot-fn value)
+  `(setf (,slot-fn *site*) ,value))
+
+(defun get-site-data (key)
+  (and (site-data *site*)
+       (gethash key (site-data *site*))))
+(defun set-site-data (key value)
+  (unless (site-data *site*)
+    (setf (site-data *site*) (make-hash-table :test 'equal)))
+  (setf (gethash key (site-data *site*)) value))
+
+(defvar *verbose* nil)
+(defun be-verbose () (setf *verbose* t))
 
 ;;;; Rule matching for individual file
 (defparameter *rules*
@@ -206,7 +220,7 @@
 	       (when (string/= (pathname-name source) "index")
 		 (build-file-entity source)))))
     (reset-root)
-    (walk-directory *content-directory* #'scan :directories t)
+    (walk-directory (abs-src "") #'scan :directories t)
     *root-entity*))
 
 (defun build-dir-entity (source)
@@ -319,6 +333,7 @@
   (let* ((target-rel (rel-target target))
 	 (target-abs (abs-target target))
 	 (entity (find-entity (if dir? (directory-namestring target-rel) target-rel))))
+    (ensure-directories-exist target-abs)
     (with-open-file (stream target-abs
 			    :element-type 'character
 			    :direction :output
@@ -332,7 +347,8 @@
 		 (list :page (getf entity :ctx)
 		       :page-parent (parent-url target-rel :dir? dir?)
 		       :children (mapcar #'(lambda (e) (getf e :ctx))
-					 (getf entity :files)))))
+					 (getf entity :files))
+		       :site *site*)))
        stream))))
 
 (defun parent-url (target &key dir?)
@@ -360,17 +376,17 @@
 
 ;;;; Utilities to deal with path
 (defun rel-src (path)
-  (enough-namestring path *content-directory*))
+  (enough-namestring path (abs-cwd (site-content-dir *site*))))
 (defun abs-src (path)
-  (merge-pathnames path *content-directory*))
+  (merge-pathnames path (abs-cwd (site-content-dir *site*))))
 
 (defun rel-tpl (path)
-  (enough-namestring path *template-directory*))
+  (enough-namestring path (abs-cwd (site-template-dir *site*))))
 (defun abs-tpl (path)
-  (merge-pathnames path *template-directory*))
+  (merge-pathnames path (abs-cwd (site-template-dir *site*))))
 
 (defun rel-target (path)
-  (enough-namestring path *target-directory*))
+  (enough-namestring path (abs-cwd (site-output-dir *site*))))
 (defun abs-target (path)
-  (merge-pathnames path *target-directory*))
+  (merge-pathnames path (abs-cwd (site-output-dir *site*))))
 
