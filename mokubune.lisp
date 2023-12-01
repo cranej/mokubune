@@ -221,6 +221,7 @@
 ;;;; walk-directory logic instead of pathnames system's, but performance
 ;;;; is not a concern here, so don't brother it.
 (defun run ()
+  (setf *cwd* (uiop/os:getcwd))
   (load (abs-cwd "config.lisp"))
   (scan-entities)
   (sort-entities)
