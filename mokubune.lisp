@@ -127,35 +127,42 @@
    (date :accessor page-date :initarg :date)
    (body :accessor page-body :initarg :body)))
 
-(defun read-body-and-title (file)
-  (let (title)
+(defparameter *date-unknown* "unknown")
+
+(defun read-body (file date)
+  (let (title
+	(date-from-body date))
     (with-open-file (stream file :element-type 'character :direction :input)
       (list
-        (with-output-to-string (body)
-          (loop with read-title = t
-                for line = (read-line stream nil nil)
-                while line
-                do (write-line line body)
-                when (and read-title (string/= line ""))
-                do
-                   (setf read-title nil)
-                   (when (str:starts-with? "#" line)
-                     (setf title (str:trim-left line :char-bag '(#\# #\Space))))))
-        title))))
+       (with-output-to-string (body)
+         (loop for line = (read-line stream nil nil)
+               while line
+               do (write-line line body)
+               when (and (null title) (string/= line ""))
+                 do
+                    (when (str:starts-with? "#" line)
+                      (setf title (str:trim-left line :char-bag '(#\# #\Space))))
+	       when (and (null date-from-body) (string/= line ""))
+		 do (register-groups-bind (date)
+			("#+\\s*(\\d{4}-\\d{2}-\\d{2})" line)
+		      (setf date-from-body date))))
+       title
+       date-from-body))))
 
 (defun parse-page (source-file target-file)
   (let* ((date
            (and source-file
-                (first
-                  (all-matches-as-strings
-                    "\\d{4}-\\d{2}-\\d{2}$" (pathname-name source-file)))))
-         (body-title (and source-file (read-body-and-title (abs-src source-file))))
+		(first
+		 (all-matches-as-strings
+		  "\\d{4}-\\d{2}-\\d{2}$" (pathname-name source-file)))))
+         (body-title-date (and source-file (read-body (abs-src source-file) date)))
+	 (date (third body-title-date))
          (url (rel-target target-file)))
     (make-instance 'page
-                   :title (or (second body-title) "")
+                   :title (or (second body-title-date) "")
                    :url url
-                   :date  (or date "unknown")
-                   :body (or (first body-title) ""))))
+                   :date  (or date *date-unknown*)
+                   :body (or (first body-title-date) ""))))
 
 ;;;; Tree like structure of entities that needs to process
 ;;; op - (:action action :target target-file-path :source source-file-path :template template-file-path)
@@ -213,6 +220,12 @@
 ;;;; Scanning and processing could be done in one-pass, with a modified
 ;;;; walk-directory logic instead of pathnames system's, but performance
 ;;;; is not a concern here, so don't brother it.
+(defun run ()
+  (load (abs-cwd "config.lisp"))
+  (scan-entities)
+  (sort-entities)
+  (process-entities))
+
 (defun scan-entities ()
   (flet ((scan (source)
 	   (if (directory-p source)
@@ -274,6 +287,17 @@
 					   :template tpl)
 				  (parse-page source target))
 		parent)))))))))
+
+;;;; sort files by date desc of each dir entities
+(defun sort-entities (&optional (root *root-entity*))
+  (setf (getf root :files)
+	(sort (getf root :files)
+	      #'(lambda (file1 file2)
+		  (or (string= (page-date (getf file2 :ctx)) *date-unknown*)
+		      (string> (page-date (getf file1 :ctx))
+			       (page-date (getf file2 :ctx)))))))
+  (dolist (dir (getf root :dirs))
+    (sort-entities dir)))
 
 ;;;; process entity - a post-order traverse
 (defun process-entities (&optional (root *root-entity*))
@@ -389,4 +413,3 @@
   (enough-namestring path (abs-cwd (site-output-dir *site*))))
 (defun abs-target (path)
   (merge-pathnames path (abs-cwd (site-output-dir *site*))))
-
