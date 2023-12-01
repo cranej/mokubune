@@ -294,9 +294,14 @@
   (setf (getf root :files)
 	(sort (getf root :files)
 	      #'(lambda (file1 file2)
-		  (or (string= (page-date (getf file2 :ctx)) *date-unknown*)
-		      (string> (page-date (getf file1 :ctx))
-			       (page-date (getf file2 :ctx)))))))
+		  (let ((ctx1 (getf file1 :ctx))
+			(ctx2 (getf file2 :ctx)))
+		    (cond ((null ctx1) nil)
+			  ((null ctx2) t)
+			  (t 
+			   (or (string= (page-date ctx1) *date-unknown*)
+			       (string> (page-date ctx1)
+					(page-date ctx2)))))))))
   (dolist (dir (getf root :dirs))
     (sort-entities dir)))
 
@@ -339,7 +344,7 @@
 	     (target (getf op :target)))
 	 (process-target
 	  target
-	  :if-any (children-out-dated (:deps (abs-src source)))
+	  :if-any (children-out-dated (:deps (list (abs-src source))))
 	  :do (copy-file (abs-src source) (abs-target target))
 	  :log ("Target: ~a:  copied from ~a~%" target source))))
       (:apply-template
@@ -371,10 +376,18 @@
 	(funcall (compile-template template)
 		 (list :page (getf entity :ctx)
 		       :page-parent (parent-url target-rel :dir? dir?)
-		       :children (mapcar #'(lambda (e) (getf e :ctx))
-					 (getf entity :files))
+		       ;; Filter out static file for now, as static files are usually hardcoded in template files for blog generating like scenarons.
+		       :children (get-entity-file-contexts entity) 
 		       :site *site*)))
        stream))))
+
+(defun get-entity-file-contexts (entity)
+  (remove-if #'null
+	   (mapcar #'(lambda (e) (getf e :ctx))
+		   (getf entity :files))))
+
+(defun get-file-contexts (entity-path &optional (root *root-entity*))
+  (get-entity-file-contexts (find-entity entity-path root)))
 
 (defun parent-url (target &key dir?)
   (if dir?
