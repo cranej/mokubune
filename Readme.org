@@ -2,24 +2,45 @@
 
 A blog generation program, try to be as intuitive as possible:
 + Try to be intuitive when selecting template file to apply. I found some other similar programs have very confusing template selecting logic.
-+ Don't regenerate pages that has no change on it's dependencies. This is one of the reasons I write this program - the tool I currently use regenerates everything each time, which is inconvenience when for example publishing site via =rsync=.
++ Don't regenerate pages that has no change on its dependencies. This is one of the reasons I write this program - the tool I currently use regenerates everything each time, which is inconvenience when for example publishing site via =rsync=.
+
+** Directory layout
+There are three directories under the working direcoty users should be aware of. All these directories are configurable.
+*** Contents directory
+Contents directory is where user wrote contents reside in, default value is "contents".
+*** Templates directory
+Templates direcotry is where template files are, default value is "templates".
+*** Output directory
+Output directory is where generated pages are, default value is "public".
+
+** Translating rule
+Currently it's simple: all ".gmi" files are applied to template, other files are copied.
+For later version there is plan to make the rule hackable.
+
 ** Template Selection
-*** Root index page
+*** Index pages
+Index pages are special. The usual workflow for static site generating program is something more or less like translating contents wrote by users to destnation directory.
+But for index pages, it's not unusual that there is no user wrote content at all. Some other similar program requires there is at least a empty file inside contents directory, only then index pages will be generated.
+Mokubune takes a different approach that if it's able to find applicable template files, index pages are generated even there is no corresponding pages in contents directory.
+
+**** Root index page
 Root index page is the index page at your site's root.
 + Always use template file "templates/index.clt".
 + If there is no such file, root index page will not be generated.
-*** Index page of sub directories
+  
+**** Index page of sub directories
 Index page will be generated for sub directoies if there is a template file which is "applicable". 
 
-If there is a content file =index.gmi= under the corresponding content sub directory, the first exists file at the following locations will be used:
+If there is a content file =index.gmi= under the corresponding contents sub directory, the first exists file at the following locations will be used:
 + templates/<sub directory>/index.clt
 + templates/sub-index.clt
 + templates/index.clt
 
 If there is no content file exists, index page will be generated only when the following template file exists:
 + templates/<sub directory>/index.clt
+  
 *** Regular page
-All files under content directory other than =index= files are treated as regular pages. The first exists template file at the following locations will be used:
+All files under contents directory other than =index= files are treated as regular pages. The first exists template file at the following locations will be used:
 + templates/<corresponding sub directories>/page.clt
 + templates/page.clt
 

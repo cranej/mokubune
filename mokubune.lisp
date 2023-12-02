@@ -1,17 +1,5 @@
 (in-package #:mokubune)
 
-;;;; Define global environments
-(defparameter *cwd* (uiop/os:getcwd))
-(defun set-working-directory (wd)
-  (setf *cwd* wd))
-
-(defun abs-cwd (path)
-  (merge-pathnames path *cwd*))
-
-(defparameter *page-template-file* "page.clt")
-(defparameter *index-template-file* "index.clt")
-(defparameter *sub-index-template-file* "sub-index.clt")
-
 (defstruct site
   (title "My brilliant writes" :type string)
   (content-dir "contents/" :type string)
@@ -21,12 +9,14 @@
   (data (make-hash-table :test 'equal)))
 
 (defvar *site* (make-site))
+
 (defmacro config (slot-fn value)
   `(setf (,slot-fn *site*) ,value))
 
 (defun get-site-data (key)
   (and (site-data *site*)
        (gethash key (site-data *site*))))
+
 (defun set-site-data (key value)
   (unless (site-data *site*)
     (setf (site-data *site*) (make-hash-table :test 'equal)))
@@ -34,6 +24,33 @@
 
 (defvar *verbose* nil)
 (defun be-verbose () (setf *verbose* t))
+
+(defparameter *cwd* (uiop/os:getcwd))
+(defun set-working-directory (wd)
+  (setf *cwd* wd))
+
+(defun abs-cwd (path)
+  (merge-pathnames path *cwd*))
+
+;;;; Utilities to deal with path
+(defun rel-src (path)
+  (enough-namestring path (abs-cwd (site-content-dir *site*))))
+(defun abs-src (path)
+  (merge-pathnames path (abs-cwd (site-content-dir *site*))))
+
+(defun rel-tpl (path)
+  (enough-namestring path (abs-cwd (site-template-dir *site*))))
+(defun abs-tpl (path)
+  (merge-pathnames path (abs-cwd (site-template-dir *site*))))
+
+(defun rel-target (path)
+  (enough-namestring path (abs-cwd (site-output-dir *site*))))
+(defun abs-target (path)
+  (merge-pathnames path (abs-cwd (site-output-dir *site*))))
+
+(defparameter *page-template-file* "page.clt")
+(defparameter *index-template-file* "index.clt")
+(defparameter *sub-index-template-file* "sub-index.clt")
 
 ;;;; Rule matching for individual file
 (defparameter *rules*
@@ -164,7 +181,7 @@
                    :date  (or date *date-unknown*)
                    :body (or (first body-title-date) ""))))
 
-;;;; Tree like structure of entities that needs to process
+;;;; Tree like structure of entities that needs to be processed
 ;;; op - (:action action :target target-file-path :source source-file-path :template template-file-path)
 ;;; context - page
 ;;; entity - (:name "last-path-seg" :op op :ctx context :files (file-entities) :dirs (dir-entities))
@@ -186,18 +203,6 @@
 	  (find-if #'(lambda (entity) (string= (getf entity :name) name))
 		   (getf parent pkey))))))
 
-(defun make-op (action target &key source template)
-  (list :action action :target target :source source :template template))
-
-(defun make-file-entity (path op contex)
-  (list :name (file-namestring path) :op op :ctx contex))
-
-;;; All properties have to be set even the values are nil - need this to make sure we can updating the nested entity returned by find-parent-entity
-(defun make-dir-entity (path &key op context files dirs)
-  (let* ((path-dir (pathname-directory path))
-	 (name (if (null path-dir) "" (car (last path-dir)))))
-    (list :name name :op op :ctx context :files files :dirs dirs)))
-
 (defun find-parent-entity (path root-entity)
   (let ((dirs (cdr (pathname-directory path))))
     (when (directory-pathname-p path)
@@ -213,13 +218,23 @@
 		     do (setf dir-entities (getf entity :dirs))
 		   finally (return entity))))))
 
+(defun make-op (action target &key source template)
+  (list :action action :target target :source source :template template))
+
+(defun make-file-entity (path op contex)
+  (list :name (file-namestring path) :op op :ctx contex))
+
+;;; All properties have to be set even the values are nil
+;;; - need this to make sure we can updating the nested entity returned by find-parent-entity
+(defun make-dir-entity (path &key op context files dirs)
+  (let* ((path-dir (pathname-directory path))
+	 (name (if (null path-dir) "" (car (last path-dir)))))
+    (list :name name :op op :ctx context :files files :dirs dirs)))
+
 (defun insert-entity (entity parent &key dir?)
   (push entity (getf parent (if dir? :dirs :files))))
 
-;;;; Walk content directory and build the root entity structure.
-;;;; Scanning and processing could be done in one-pass, with a modified
-;;;; walk-directory logic instead of pathnames system's, but performance
-;;;; is not a concern here, so don't brother it.
+;;;; Entry point
 (defun run ()
   (setf *cwd* (uiop/os:getcwd))
   (load (abs-cwd "config.lisp"))
@@ -227,6 +242,10 @@
   (sort-entities)
   (process-entities))
 
+;;; Walk content directory and build the root entity structure.
+;;; Scanning and processing could be done in one-pass, with a modified
+;;; walk-directory logic instead of pathnames system's, but performance
+;;; is not a concern here, so don't brother it.
 (defun scan-entities ()
   (flet ((scan (source)
 	   (if (directory-p source)
@@ -289,7 +308,7 @@
 				  (parse-page source target))
 		parent)))))))))
 
-;;;; sort files by date desc of each dir entities
+;;; sort files by date desc of each dir entities
 (defun sort-entities (&optional (root *root-entity*))
   (setf (getf root :files)
 	(sort (getf root :files)
@@ -305,7 +324,7 @@
   (dolist (dir (getf root :dirs))
     (sort-entities dir)))
 
-;;;; process entity - a post-order traverse
+;;; process entity - a post-order traverse
 (defun process-entities (&optional (root *root-entity*))
   (let ((children-out-dated nil))
     (dolist (file (getf root :files))
@@ -318,11 +337,10 @@
       (setf children-out-dated t))
     children-out-dated))
 
-
 (defmacro process-target (target &key if-any do log)
   (flet ((if-form (form)
 	   (cond ((atom form) form)
-		 ((eq :deps (car form))
+		 ((eq :deps-outdated (car form))
 		  `(apply #'deps-newer-p (abs-target ,target) ,@(cdr form)))
 		 (t `(,@form)))))
     (destructuring-bind (act-fn &rest args) do
@@ -344,7 +362,7 @@
 	     (target (getf op :target)))
 	 (process-target
 	  target
-	  :if-any (children-out-dated (:deps (list (abs-src source))))
+	  :if-any (children-out-dated (:deps-outdated (list (abs-src source))))
 	  :do (copy-file (abs-src source) (abs-target target))
 	  :log ("Target: ~a:  copied from ~a~%" target source))))
       (:apply-template
@@ -355,7 +373,7 @@
 	 (when source (push (abs-src source) deps))
 	 (process-target
 	  target
-	  :if-any (children-out-dated (:deps deps))
+	  :if-any (children-out-dated (:deps-outdated deps))
 	  :do (apply-template target tpl :dir? dir?)
 	  :log ("Target: ~a: applied template ~a to ~a~%" target tpl source)))))))
 
@@ -376,15 +394,16 @@
 	(funcall (compile-template template)
 		 (list :page (getf entity :ctx)
 		       :page-parent (parent-url target-rel :dir? dir?)
-		       ;; Filter out static file for now, as static files are usually hardcoded in template files for blog generating like scenarons.
 		       :children (get-entity-file-contexts entity) 
 		       :site *site*)))
        stream))))
 
+;;; Filter out static file for now, as referring to static files are usually hardcoded
+;;; in template files for scenarios like blog generating
 (defun get-entity-file-contexts (entity)
   (remove-if #'null
-	   (mapcar #'(lambda (e) (getf e :ctx))
-		   (getf entity :files))))
+	     (mapcar #'(lambda (e) (getf e :ctx))
+		     (getf entity :files))))
 
 (defun get-file-contexts (entity-path &optional (root *root-entity*))
   (get-entity-file-contexts (find-entity entity-path root)))
@@ -411,19 +430,3 @@
 		(let ((template (make-string (file-length stream))))
 		  (read-sequence template stream)
 		  (cl-template:compile-template template)))))))
-
-;;;; Utilities to deal with path
-(defun rel-src (path)
-  (enough-namestring path (abs-cwd (site-content-dir *site*))))
-(defun abs-src (path)
-  (merge-pathnames path (abs-cwd (site-content-dir *site*))))
-
-(defun rel-tpl (path)
-  (enough-namestring path (abs-cwd (site-template-dir *site*))))
-(defun abs-tpl (path)
-  (merge-pathnames path (abs-cwd (site-template-dir *site*))))
-
-(defun rel-target (path)
-  (enough-namestring path (abs-cwd (site-output-dir *site*))))
-(defun abs-target (path)
-  (merge-pathnames path (abs-cwd (site-output-dir *site*))))
