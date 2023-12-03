@@ -25,7 +25,7 @@
 (defvar *verbose* nil)
 (defun be-verbose () (setf *verbose* t))
 
-(defparameter *cwd* (uiop/os:getcwd))
+(defvar *cwd* (uiop/os:getcwd))
 (defun set-working-directory (wd)
   (setf *cwd* wd))
 
@@ -52,10 +52,15 @@
 (defparameter *index-template-file* "index.clt")
 (defparameter *sub-index-template-file* "sub-index.clt")
 
+(defvar *default-index-type* "gmi")
+(defun default-index-type (type)
+  (setf *default-index-type* type))
+
 ;;;; Rule matching for individual file
 (defparameter *rules*
   (list
    (list "*.gmi" :apply-template)
+   (list "*.md" :apply-template)
    (list "*" :copy)))
 
 (defun match-rule (path)
@@ -131,7 +136,7 @@
   (let* ((source (abs-src source))
          (target (abs-target (rel-src source))))
     (if (directory-pathname-p target)
-        (merge-pathnames "index.gmi" target) ;; TODO: configurable
+	(make-pathname :name "index" :type *default-index-type** :defaults target)
         target)))
 
 (defun set-extension (target extension)
@@ -259,14 +264,13 @@
 (defun build-dir-entity (source)
   (let* ((source (rel-src source))
 	 (is-root (string= source ""))
-	 ;; TODO: index file extension should be configurable
-         (index-source (file-exists-p (abs-src (merge-pathnames "index.gmi" source))))
+         (index-source (first (directory (merge-pathnames "index.*" (abs-src source)))))
          (tpl (find-template source :fallback index-source))
 	 (parent (find-parent-entity source *root-entity*)))
     (unless parent
       (error "Unable to find parent for ~a" source))
     (if tpl
-        (let* ((target (rel-target (find-target source)))
+        (let* ((target (rel-target (find-target (or index-source source))))
 	       (op (make-op :apply-template target 
 			    :source (and index-source
 					 (rel-src index-source))
