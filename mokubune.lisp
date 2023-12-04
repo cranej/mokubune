@@ -60,13 +60,19 @@
 (defparameter *rules*
   (list
    (list "*.gmi" :apply-template)
-   (list "*.md" :apply-template)
    (list "*" :copy)))
+
+(defparameter *allowed-actions* '(:apply-template :copy))
+
+(defun add-rule (pattern action)
+  (if (find action *allowed-actions*)
+      (push (list pattern action) *rules*)
+      (format t "Unknown action: ~s~%" action)))
 
 (defun match-rule (path)
   (loop for (pattern fn) in *rules*
         when (match-pattern pattern path)
-        return fn))
+          return fn))
 
 (defun match-pattern (pattern path)
   (loop for pattern-segment in (split-pattern pattern)
@@ -247,12 +253,16 @@
 (defun run-with-args (args)
   (cond ((string= (first args) "-init")
 	 (do-init))
+	((or (string= (first args) "-version")
+	     (string= (first args) "-v"))
+	 (format t "~a~%" *version*))
 	((> (length args) 0)
 	 (format t "Usage: mokubune~%")
 	 (format t "  Process current directory.~%")
 	 (format t "~%")
-	 (format t "Usage: mokubune -init~%")
-	 (format t "  Create default templates and directory layout in current directoy.~%"))
+	 (format t "Usage: mokubune <flag>~%")
+	 (format t "  -init             Create default templates and directory layout in current directoy.~%")
+	 (format t "  -v | -version     Print version information and exit.~%"))
 	(t (do-generating))))
 
 (defun do-generating ()

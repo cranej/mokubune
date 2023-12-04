@@ -3,11 +3,12 @@
 
 (defsystem "mokubune"
   :author "cranej"
-  :version "0.1.0"
+  :version (:read-file-form "version.lisp" :at (1 2))
   :description "A static site generator."
   :licence "GPL"
   :serial t
   :components ((:file "packages")
                (:file "mokubune")
-	       (:file "init"))
+	       (:file "init")
+	       (:file "version"))
   :depends-on ("alexandria" "str" "pathnames" "cl-ppcre" "cl-template"))
