@@ -8,5 +8,6 @@
   :licence "GPL"
   :serial t
   :components ((:file "packages")
-               (:file "mokubune"))
+               (:file "mokubune")
+	       (:file "init"))
   :depends-on ("alexandria" "str" "pathnames" "cl-ppcre" "cl-template"))

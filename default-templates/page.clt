@@ -1,0 +1,11 @@
+=> <%= @ page-parent %> ←
+
+<%= page-body (@ page) -%>
+
+---------------------
+Published on <%= page-date (@ page) %>
+The content for this site is licensed under:
+=>https://creativecommons.org/licenses/by-sa/4.0/ CC-BY-SA
+
+
+

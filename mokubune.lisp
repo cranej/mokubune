@@ -242,7 +242,23 @@
 ;;;; Entry point
 (defun run ()
   (setf *cwd* (uiop/os:getcwd))
-  (load (abs-cwd "config.lisp"))
+  (run-with-args (uiop:command-line-arguments)))
+ 
+(defun run-with-args (args)
+  (cond ((string= (first args) "-init")
+	 (do-init))
+	((> (length args) 0)
+	 (format t "Usage: mokubune~%")
+	 (format t "  Process current directory.~%")
+	 (format t "~%")
+	 (format t "Usage: mokubune -init~%")
+	 (format t "  Create default templates and directory layout in current directoy.~%"))
+	(t (do-generating))))
+
+(defun do-generating ()
+  (let ((config-file (file-exists-p (abs-cwd "config.lisp"))))
+    (when config-file
+	(load config-file)))
   (scan-entities)
   (sort-entities)
   (process-entities))
