@@ -2,7 +2,7 @@
 (in-package #:mokubune-system)
 
 (defsystem "mokubune"
-  :author "cranej"
+  :author "cranej <crane@cranejin.com>"
   :version (:read-file-form "version.lisp" :at (1 2))
   :description "A static site generator."
   :licence "GPL"
