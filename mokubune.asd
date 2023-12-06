@@ -7,8 +7,12 @@
   :description "A static site generator."
   :licence "GPL"
   :serial t
-  :components ((:file "packages")
-               (:file "mokubune")
+  :components ((:module "pathnames"
+		:serial t
+		:components ((:file "packages")
+			     (:file "pathnames")))
+	       (:file "packages")
+	       (:file "version")
 	       (:file "init")
-	       (:file "version"))
-  :depends-on ("alexandria" "str" "pathnames" "cl-ppcre" "cl-template"))
+               (:file "mokubune"))
+  :depends-on ("alexandria" "str" "cl-ppcre" "cl-template-trim"))

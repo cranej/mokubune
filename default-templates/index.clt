@@ -1,5 +1,6 @@
 <% if (@ page) -%>
 <%= page-body (@ page) -%>
+
 <% end -%>
 Posts on <%= site-title (@ site) %>:
 <% loop for post in (@ children) do -%>

@@ -1,57 +1,5 @@
 (in-package #:mokubune)
 
-(defstruct site
-  (title "My brilliant writes" :type string)
-  (content-dir "contents/" :type string)
-  (template-dir "templates/" :type string)
-  (output-dir "public/" :type string)
-  (base-url "" :type string)
-  (data (make-hash-table :test 'equal)))
-
-(defvar *site* (make-site))
-
-(defmacro config (slot-fn value)
-  `(setf (,slot-fn *site*) ,value))
-
-(defun get-site-data (key)
-  (and (site-data *site*)
-       (gethash key (site-data *site*))))
-
-(defun set-site-data (key value)
-  (unless (site-data *site*)
-    (setf (site-data *site*) (make-hash-table :test 'equal)))
-  (setf (gethash key (site-data *site*)) value))
-
-(defvar *verbose* nil)
-(defun be-verbose () (setf *verbose* t))
-
-(defvar *cwd* (uiop/os:getcwd))
-(defun set-working-directory (wd)
-  (setf *cwd* wd))
-
-(defun abs-cwd (path)
-  (merge-pathnames path *cwd*))
-
-;;;; Utilities to deal with path
-(defun rel-src (path)
-  (enough-namestring path (abs-cwd (site-content-dir *site*))))
-(defun abs-src (path)
-  (merge-pathnames path (abs-cwd (site-content-dir *site*))))
-
-(defun rel-tpl (path)
-  (enough-namestring path (abs-cwd (site-template-dir *site*))))
-(defun abs-tpl (path)
-  (merge-pathnames path (abs-cwd (site-template-dir *site*))))
-
-(defun rel-target (path)
-  (enough-namestring path (abs-cwd (site-output-dir *site*))))
-(defun abs-target (path)
-  (merge-pathnames path (abs-cwd (site-output-dir *site*))))
-
-(defparameter *page-template-file* "page.clt")
-(defparameter *index-template-file* "index.clt")
-(defparameter *sub-index-template-file* "sub-index.clt")
-
 (defvar *default-index-type* "gmi")
 (defun default-index-type (type)
   (setf *default-index-type* type))
@@ -128,7 +76,7 @@
   (labels ((what-path (source)
 	     (cond ((string= source "") :root-dir)
 		   ((directory-pathname-p source) :sub-dir)
-		   (t :page))	     ))
+		   (t :page))))
     (let ((source (rel-src source)))
       (ecase (what-path source)
 	(:root-dir (list (abs-tpl *index-template-file*)))
@@ -138,15 +86,12 @@
 	(:page (list (merge-pathnames *page-template-file* (abs-tpl source))
 		     (abs-tpl *page-template-file*)))))))
 
-(defun find-target (source)
+(defun determine-target (source)
   (let* ((source (abs-src source))
          (target (abs-target (rel-src source))))
     (if (directory-pathname-p target)
-	(make-pathname :name "index" :type *default-index-type** :defaults target)
+	(make-pathname :name "index" :type *default-index-type* :defaults target)
         target)))
-
-(defun set-extension (target extension)
-  (make-pathname :type extension :defaults target))
 
 ;;;; Page context
 (defclass page ()
@@ -279,7 +224,7 @@
 ;;; is not a concern here, so don't brother it.
 (defun scan-entities ()
   (flet ((scan (source)
-	   (if (directory-p source)
+	   (if (directory-pathname-p source)
 	       (build-dir-entity source)
 	       (when (string/= (pathname-name source) "index")
 		 (build-file-entity source)))))
@@ -296,7 +241,7 @@
     (unless parent
       (error "Unable to find parent for ~a" source))
     (if tpl
-        (let* ((target (rel-target (find-target (or index-source source))))
+        (let* ((target (rel-target (determine-target (or index-source source))))
 	       (op (make-op :apply-template target 
 			    :source (and index-source
 					 (rel-src index-source))
@@ -313,7 +258,7 @@
 
 (defun build-file-entity (source)
   (let* ((source (rel-src source))
-	 (target (rel-target (find-target source)))
+	 (target (rel-target (determine-target source)))
 	 (matched
            (find-if #'(lambda (r) (match-pattern (first r) source))
 		    *rules*)))
@@ -338,7 +283,7 @@
 				  (parse-page source target))
 		parent)))))))))
 
-;;; sort files by date desc of each dir entities
+;;; sort files by date desc of each dir entities, static files and files with date "unknown" have the least order
 (defun sort-entities (&optional (root *root-entity*))
   (setf (getf root :files)
 	(sort (getf root :files)
@@ -347,14 +292,15 @@
 			(ctx2 (getf file2 :ctx)))
 		    (cond ((null ctx1) nil)
 			  ((null ctx2) t)
+			  ((string= (page-date ctx1) *date-unknown*) nil)
+			  ((string= (page-date ctx2) *date-unknown*) t)
 			  (t 
-			   (or (string= (page-date ctx1) *date-unknown*)
-			       (string> (page-date ctx1)
-					(page-date ctx2)))))))))
+			   (string> (page-date ctx1)
+				    (page-date ctx2))))))))
   (dolist (dir (getf root :dirs))
     (sort-entities dir)))
 
-;;; process entity - a post-order traverse
+;;; process entities - a post-order traverse
 (defun process-entities (&optional (root *root-entity*))
   (let ((children-out-dated nil))
     (dolist (file (getf root :files))
