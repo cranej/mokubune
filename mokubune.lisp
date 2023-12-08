@@ -143,36 +143,25 @@
 ;;; entity - (:name "last-path-seg" :op op :ctx context :files (file-entities) :dirs (dir-entities))
 (defparameter *root-entity* nil)
 
-(defun reset-root ()
-  (setf *root-entity* (list :name "" :op nil :ctx nil :files nil :dirs nil)))
-
 (defun find-entity (path &optional (root *root-entity*))
   (if (string= (namestring path) "")
       (and (string= (getf root :name) "") root)
-      
-      (let ((parent (find-parent-entity path root))
-	    (name (if (directory-pathname-p path)
-		      (car (last (pathname-directory path)))
-		      (file-namestring path)))
-	    (pkey (if (directory-pathname-p path) :dirs :files)))
-	(when parent
-	  (find-if #'(lambda (entity) (string= (getf entity :name) name))
-		   (getf parent pkey))))))
 
-(defun find-parent-entity (path root-entity)
-  (let ((dirs (cdr (pathname-directory path))))
-    (when (directory-pathname-p path)
-      (setf dirs (butlast dirs)))
-    (cond ((null dirs) root-entity)
-	  (t (loop with dir-entities = (getf root-entity :dirs)
-		   for (d next) on dirs
-		   for entity = (find-if #'(lambda (e)
-					     (string= d (getf e :name)))
-					 dir-entities)
-		   while entity
-		   when entity
-		     do (setf dir-entities (getf entity :dirs))
-		   finally (return entity))))))
+      (let ((directory-parts (rest (pathname-directory path)))
+	    (file (if (directory-pathname-p path) nil (file-namestring path))))
+	(loop with current = root
+	      for current-dir-target = (first directory-parts)
+	      while current
+	      when (null current-dir-target)
+		do (if file
+		       (return (find-if #'(lambda (e) (string= file (getf e :name)))
+					(getf current :files)))
+		       (return current))
+	      do
+		 (setf current (find-if #'(lambda (e)
+					    (string= current-dir-target (getf e :name)))
+					(getf current :dirs)))
+		 (pop directory-parts)))))
 
 (defun make-op (action target &key source template)
   (list :action action :target target :source source :template template))
@@ -181,7 +170,7 @@
   (list :name (file-namestring path) :op op :ctx contex))
 
 ;;; All properties have to be set even the values are nil
-;;; - need this to make sure we can updating the nested entity returned by find-parent-entity
+;;; - need this to make sure we can updating the nested entity
 (defun make-dir-entity (path &key op context files dirs)
   (let* ((path-dir (pathname-directory path))
 	 (name (if (null path-dir) "" (car (last path-dir)))))
@@ -218,43 +207,42 @@
   (sort-entities)
   (process-entities))
 
-;;; Walk content directory and build the root entity structure.
-;;; Scanning and processing could be done in one-pass, with a modified
-;;; walk-directory logic instead of pathnames system's, but performance
-;;; is not a concern here, so don't brother it.
+(defparameter *dir-stack* nil)
 (defun scan-entities ()
+  "Walk content directory and build the root entity structure"
   (flet ((scan (source)
 	   (if (directory-pathname-p source)
 	       (build-dir-entity source)
 	       (when (string/= (pathname-name source) "index")
 		 (build-file-entity source)))))
-    (reset-root)
-    (walk-directory (abs-src "") #'scan :directories t)
+    (setf *root-entity* nil *dir-stack* nil)
+    (walk-directory (abs-src "") #'scan :directories t
+					:on-leave-dir #'(lambda (dir)
+							  (declare (ignore dir))
+							  (pop *dir-stack*)))
     *root-entity*))
 
 (defun build-dir-entity (source)
-  (let* ((source (rel-src source))
-	 (is-root (string= source ""))
+  (let* ((source (rel-src source))       
          (index-source (first (directory (merge-pathnames "index.*" (abs-src source)))))
          (tpl (find-template source :fallback index-source))
-	 (parent (find-parent-entity source *root-entity*)))
-    (unless parent
-      (error "Unable to find parent for ~a" source))
-    (if tpl
-        (let* ((target (rel-target (determine-target (or index-source source))))
-	       (op (make-op :apply-template target 
-			    :source (and index-source
-					 (rel-src index-source))
-			    :template (rel-tpl tpl)))
-	       (context (parse-page index-source target)))
-	  (if is-root
-	      (progn
-		(setf (getf parent :op) op)
-		(setf (getf parent :ctx) context))
-	      (insert-entity (make-dir-entity source :op op :context context)
-			     parent :dir? t)))
-	(unless is-root
-	  (insert-entity (make-dir-entity source) parent :dir? t)))))
+	 (parent (first *dir-stack*))
+	 (dir-entity (create-dir-entity tpl index-source source)))
+    (if parent
+	(insert-entity dir-entity parent :dir? t)
+	(setf *root-entity* dir-entity))
+    (push dir-entity *dir-stack*)))
+
+(defun create-dir-entity (tpl index-source source)
+  (if tpl
+      (let* ((target (rel-target (determine-target (or index-source source))))
+	     (op (make-op :apply-template target 
+			  :source (and index-source
+				       (rel-src index-source))
+			  :template (rel-tpl tpl)))
+	     (context (parse-page index-source target)))
+	(make-dir-entity source :op op :context context))
+      (make-dir-entity source)))
 
 (defun build-file-entity (source)
   (let* ((source (rel-src source))
@@ -263,9 +251,9 @@
            (find-if #'(lambda (r) (match-pattern (first r) source))
 		    *rules*)))
     (when matched
-      (let ((parent (find-parent-entity target *root-entity*)))
+      (let ((parent (first *dir-stack*)))
 	(unless parent
-	  (error "Unable to find parent of ~a~%" target))
+	  (error "dir-stack is nil while processing file ~a~%" target))
 	(case (second matched)
           (:copy (insert-entity
 		  (make-file-entity target
@@ -283,8 +271,8 @@
 				  (parse-page source target))
 		parent)))))))))
 
-;;; sort files by date desc of each dir entities, static files and files with date "unknown" have the least order
 (defun sort-entities (&optional (root *root-entity*))
+  "Sort files by date desc of each dir entities, static files and files with date \"unknown\" have the least order"
   (setf (getf root :files)
 	(sort (getf root :files)
 	      #'(lambda (file1 file2)
@@ -300,8 +288,8 @@
   (dolist (dir (getf root :dirs))
     (sort-entities dir)))
 
-;;; process entities - a post-order traverse
 (defun process-entities (&optional (root *root-entity*))
+  "Process entities in a post-order traverse"
   (let ((children-out-dated nil))
     (dolist (file (getf root :files))
       (when (process-op (getf file :op))

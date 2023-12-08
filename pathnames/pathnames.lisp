@@ -166,7 +166,7 @@ it is already in file form."
          :defaults pathname))
       pathname)))
 
-(defun walk-directory (dirname fn &key directories (test (constantly t)))
+(defun walk-directory (dirname fn &key directories (test (constantly t)) (on-leave-dir (constantly t)))
   "Walk a directory invoking `fn' on each pathname found. If `test' is
 supplied fn is invoked only on pathnames for which `test' returns
 true. If `directories' is t invokes `test' and `fn' on directory
@@ -177,7 +177,8 @@ pathnames as well."
            ((directory-pathname-p name)
             (when (and directories (funcall test name))
               (funcall fn name))
-            (dolist (x (list-directory name)) (walk x)))
+            (dolist (x (list-directory name)) (walk x))
+	    (funcall on-leave-dir name))
            ((funcall test name) (funcall fn name)))))
     (walk (pathname-as-directory dirname))))
 
