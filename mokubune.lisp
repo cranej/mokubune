@@ -199,13 +199,14 @@
 	 (format t "  -v | -version     Print version information and exit.~%"))
 	(t (do-generating))))
 
+(defparameter *runtime-config-file* nil)
 (defun do-generating ()
-  (let ((config-file (file-exists-p (abs-cwd "config.lisp"))))
-    (when config-file
-	(load config-file)))
-  (scan-entities)
-  (sort-entities)
-  (process-entities))
+  (let ((*runtime-config-file* (file-exists-p (abs-cwd "config.lisp"))))
+    (when *runtime-config-file*
+      (load *runtime-config-file*))
+    (scan-entities)
+    (sort-entities)
+    (process-entities)))
 
 (defparameter *dir-stack* nil)
 (defun scan-entities ()
@@ -305,7 +306,9 @@
   (flet ((if-form (form)
 	   (cond ((atom form) form)
 		 ((eq :deps-outdated (car form))
-		  `(apply #'deps-newer-p (abs-target ,target) ,@(cdr form)))
+		  `(apply #'deps-newer-p
+			  (abs-target ,target)
+			  (with-config-file ,@(cdr form))))
 		 (t `(,@form)))))
     (destructuring-bind (act-fn &rest args) do
       `(if (or ,@(mapcar #'if-form if-any))
@@ -340,6 +343,11 @@
 	  :if-any (children-out-dated (:deps-outdated deps))
 	  :do (apply-template target tpl :dir? dir?)
 	  :log ("Target: ~a: applied template ~a to ~a~%" target tpl source)))))))
+
+(defun with-config-file (deps)
+  (if *runtime-config-file*
+      (cons *runtime-config-file* deps)
+      deps))
 
 (defun apply-template (target template &key dir?)
   (let* ((target-rel (rel-target target))
