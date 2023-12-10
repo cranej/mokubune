@@ -1,6 +1,6 @@
 * mokubune
 
-A static site generating program (or as a batch processor), try to be as intuitive as possible:
+A static site generating program (or you can think it as a batch processor), try to be as intuitive as possible:
 + Try to be intuitive when selecting template file to apply. I found some other similar programs have very confusing template selecting logic.
 + Don't regenerate pages that has no change on its dependencies. This is one of the reasons I write this program - the tool I previously used regenerates everything each time, which is inconvenience when for example publishing site via =rsync=.
   
@@ -65,6 +65,9 @@ variables you may actually want to configure, and helper functions are provided:
   (be-verbose)
 #+end_src
 
+*** Template Syntax
+=mokubune= use a modified version of =cl-template=, please refer to its [[https://codeberg.org/cranej/cl-template-trim][document]].
+
 *** Variables available in templates
 Templates are run inside the /same/ package of =mokubune= code, so again there is no limitation of what you can access. The below variables are provided for conveniences: 
 + =page= is an instance of:
@@ -94,6 +97,15 @@ Templates are run inside the /same/ package of =mokubune= code, so again there i
   #+end_src
   
 ** Template Selection
+The general rule is, =mokubune= firstly try to use the /specific/ template for the content, and if it does not exist, fallback to the one at the root of templates directory.
+This provides a possibility to use different templates for some contents.
+*** Regular page
+All files under contents directory other than =index= files (all "index.*" files) are treated as regular pages. The first exists template file at the following locations will be used:
++ templates/<corresponding sub directories>/page.clt
++ templates/page.clt
+
+For example, for page =contents/sub1/post-123.gmi=, if =templates/sub1/page.clt= exists, it will be used. Otherwise use =templates/page.clt=.
+
 *** Index pages
 Index pages are special. The usual workflow for static site generating program is something more or less like translating contents wrote by users to destnation directory.
 But for index pages, it's not unusual that there is no user wrote content at all. Some other similar program requires there is at least a empty file inside contents directory, only then index pages will be generated.
@@ -113,12 +125,4 @@ If there is a content file =index.gmi= under the corresponding contents sub dire
 + templates/index.clt
 
 If there is no content file exists, index page will be generated only when the following template file exists:
-+ templates/<sub directory>/index.clt
-  
-*** Regular page
-All files under contents directory other than =index= files are treated as regular pages. The first exists template file at the following locations will be used:
-+ templates/<corresponding sub directories>/page.clt
-+ templates/page.clt
-
-For example, for page =contents/sub1/post-123.gmi=, if =templates/sub1/page.clt= exists, it will be used. Otherwise use =templates/page.clt=.
-
++ templates/<sub directory>/index.clt 
