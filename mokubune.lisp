@@ -100,12 +100,29 @@
    (date :accessor page-date :initarg :date)
    (body :accessor page-body :initarg :body)))
 
+(defmethod print-object ((object page) stream)
+  (print-unreadable-object (object stream :type t)
+    (with-slots (title url date body) object
+      (format stream "Title: ~a, url: ~a, date: ~a, length of body: ~d"
+	      title url date (length body)))))
+
 (defparameter *date-unknown* "unknown")
 
-(defun read-body (file date)
+(defgeneric read-body (type path)
+  (:documentation "Parse body, title, and date from file pathname and file cointent."))
+
+(defmethod read-body ((type t) path)
+  (list nil (file-namestring path) (parse-date-from-filename path)))
+
+(defun parse-date-from-filename (path)
+  (first
+   (all-matches-as-strings
+    "\\d{4}-\\d{2}-\\d{2}$" (pathname-name path))))
+
+(defmethod read-body ((type (eql 'file-type-gmi)) path)
   (let (title
-	(date-from-body date))
-    (with-open-file (stream file :element-type 'character :direction :input)
+	(date (parse-date-from-filename path)))
+    (with-open-file (stream path :element-type 'character :direction :input)
       (list
        (with-output-to-string (body)
          (loop for line = (read-line stream nil nil)
@@ -115,20 +132,38 @@
                  do
                     (when (str:starts-with? "#" line)
                       (setf title (str:trim-left line :char-bag '(#\# #\Space))))
-	       when (and (null date-from-body) (string/= line ""))
-		 do (register-groups-bind (date)
-			("#+\\s*(\\d{4}-\\d{2}-\\d{2})" line)
-		      (setf date-from-body date))))
+	       when (and (null date) (string/= line ""))
+		 do (register-groups-bind (date-from-body)
+					  ("#+\\s*(\\d{4}-\\d{2}-\\d{2})" line)
+					  (setf date date-from-body))))
        title
-       date-from-body))))
+       date))))
+
+(defmethod read-body ((type (eql 'file-type-org)) path)
+  (let (title
+	(date (parse-date-from-filename path)))
+    (with-open-file (stream path :element-type 'character :direction :input)
+      (list
+       (with-output-to-string (body)
+         (loop for line = (read-line stream nil nil)
+               while line
+               do (write-line line body)
+               when (and (null title) (string/= line ""))
+                 do (register-groups-bind (title-from-body)
+			("^#\\+title:\\s*(.*)" line)
+		      (setf title title-from-body))
+	       when (and (null date) (string/= line ""))
+		 do (register-groups-bind (date-from-body)
+			("^#\\+date:\\s*(\\d{4}-\\d{2}-\\d{2})" line)
+		      (setf date date-from-body))))
+       (or title (file-namestring path))
+       date))))
 
 (defun parse-page (source-file target-file)
-  (let* ((date
-           (and source-file
-		(first
-		 (all-matches-as-strings
-		  "\\d{4}-\\d{2}-\\d{2}$" (pathname-name source-file)))))
-         (body-title-date (and source-file (read-body (abs-src source-file) date)))
+  (let* ((type (and source-file
+		    (read-from-string
+		     (format nil "file-type-~a" (pathname-type source-file)))))
+         (body-title-date (and source-file (read-body type (abs-src source-file))))
 	 (date (third body-title-date))
          (url (rel-target target-file)))
     (make-instance 'page
@@ -187,16 +222,15 @@
 (defun run-with-args (args)
   (cond ((string= (first args) "-init")
 	 (do-init))
-	((or (string= (first args) "-version")
-	     (string= (first args) "-v"))
-	 (format t "~a~%" *version*))
+	((string= (first args) "-version")
+	    (format t "~a~%" *version*))
 	((> (length args) 0)
 	 (format t "Usage: mokubune~%")
 	 (format t "  Process current directory.~%")
 	 (format t "~%")
 	 (format t "Usage: mokubune <flag>~%")
 	 (format t "  -init             Create default templates and directory layout in current directoy.~%")
-	 (format t "  -v | -version     Print version information and exit.~%"))
+	 (format t "  -version          Print version information and exit.~%"))
 	(t (do-generating))))
 
 (defparameter *runtime-config-file* nil)
@@ -259,7 +293,7 @@
           (:copy (insert-entity
 		  (make-file-entity target
 				    (make-op :copy target :source source)
-				    nil)
+				    (parse-page source target))
 		  parent))
           (:apply-template
            (let ((tpl (rel-tpl (find-template source))))
@@ -330,7 +364,7 @@
 	 (process-target
 	  target
 	  :if-any (children-out-dated (:deps-outdated (list (abs-src source))))
-	  :do (copy-file (abs-src source) (abs-target target))
+	  :do (ensure-dir-and-copy-file source target)
 	  :log ("Target: ~a:  copied from ~a~%" target source))))
       (:apply-template
        (let* ((source (getf op :source))
@@ -348,6 +382,12 @@
   (if *runtime-config-file*
       (cons *runtime-config-file* deps)
       deps))
+
+(defun ensure-dir-and-copy-file (source target)
+  (let ((source-abs (abs-src source))
+	(target-abs (abs-target target)))
+    (ensure-directories-exist target-abs)
+    (copy-file source-abs target-abs)))
 
 (defun apply-template (target template &key dir?)
   (let* ((target-rel (rel-target target))
@@ -370,12 +410,9 @@
 		       :site *site*)))
        stream))))
 
-;;; Filter out static file for now, as referring to static files are usually hardcoded
-;;; in template files for scenarios like blog generating
 (defun get-entity-file-contexts (entity)
-  (remove-if #'null
-	     (mapcar #'(lambda (e) (getf e :ctx))
-		     (getf entity :files))))
+  (mapcar #'(lambda (e) (getf e :ctx))
+	  (getf entity :files)))
 
 (defun get-file-contexts (entity-path &optional (root *root-entity*))
   (get-entity-file-contexts (find-entity entity-path root)))
