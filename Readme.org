@@ -1,6 +1,10 @@
+#+title: mokubune - a static site generator
+#+author: cranej
+#+email: crane@cranejin.com
+
 * mokubune
 
-A static site generating program (or you can think it as a batch processor), try to be as intuitive as possible:
+A static site generating program (or you can think it as a batch processor) written in Common Lisp, try to be as intuitive as possible:
 + Try to be intuitive when selecting template file to apply. I found some other similar programs have very confusing template selecting logic.
 + Don't regenerate pages that has no change on its dependencies. This is one of the reasons I write this program - the tool I previously used regenerates everything each time, which is inconvenience when for example publishing site via =rsync=.
   
@@ -24,11 +28,12 @@ Gemtext is the first citizen format of Gemini Protocol as HTML to the web, so th
 ** Installation
 =mokubune= has been tested only on SBCL and Linux.
 *** Dependencies
-+ =cl-template-trim=, it's currently not on Quicklisp. You can find it [[https://codeberg.org/cranej/cl-template-trim][here]].
-+ Other libraries are all on Quicklisp already, you don't need to install them manually.
++ A working =Quicklisp= installation.
++ =cl-template-trim= - it's currently not on Quicklisp, so you need to download it from [[https://codeberg.org/cranej/cl-template-trim][here]] and put to somewhere your ASDF can locate. 
++ Other libraries are all on =Quicklisp= already, you don't need to install them manually.
 *** Install
-1. Clone this repository to somewhere your ASDF can locate.
-2. Enter to it and run =make=, or =make install= if you want to install to system location.
+1. Clone [[https://codeberg.org/cranej/mokubune][this repository]] to somewhere your ASDF can locate.
+3. Enter to the cloned repository and run =make=, or =make install= if you want to install to system location.
 
 ** Usage
 =mokubune --help=:

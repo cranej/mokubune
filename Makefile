@@ -6,7 +6,7 @@ endif
 
 bin/mokubune: *.lisp mokubune.asd default-templates/*
 	mkdir -p "$(@D)"
-	sbcl --noinform --eval "(asdf:load-system \"mokubune\")" \
+	sbcl --noinform --eval "(ql:quickload \"mokubune\")" \
 		--eval "(in-package #:mokubune)" \
 		--eval "(load-default-templates-content \"$(CURDIR)/default-templates/\")" \
 		--eval "(sb-ext:save-lisp-and-die \"$@\" :toplevel 'run :executable t :save-runtime-options t)" \
