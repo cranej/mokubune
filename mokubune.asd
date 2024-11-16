@@ -12,6 +12,7 @@
 		:components ((:file "packages")
 			     (:file "pathnames")))
 	       (:file "packages")
+	       (:file "gemtext")
 	       (:file "version")
 	       (:file "init")
                (:file "mokubune"))

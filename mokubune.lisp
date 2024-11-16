@@ -221,6 +221,7 @@
  
 (defun run-with-args (args)
   (cond ((string= (first args) "-init")
+	 ;; TODO: should load configuration file before do-init
 	 (do-init))
 	((string= (first args) "-version")
 	    (format t "~a~%" *version*))
@@ -336,7 +337,7 @@
       (setf children-out-dated t))
     children-out-dated))
 
-(defmacro process-target (target &key if-any do log)
+(defmacro process-target (target &key if-any do-list log)
   (flet ((if-form (form)
 	   (cond ((atom form) form)
 		 ((eq :deps-outdated (car form))
@@ -344,16 +345,45 @@
 			  (abs-target ,target)
 			  (with-config-file ,@(cdr form))))
 		 (t `(,@form)))))
-    (destructuring-bind (act-fn &rest args) do
+    (let ((fn-applies (mapcar #'(lambda (fn-apply)
+				  (destructuring-bind (fn &rest args) fn-apply
+				      `(,fn ,@args)))
+			      do-list)))
       `(if (or ,@(mapcar #'if-form if-any))
 	   (progn
-	     (,act-fn ,@args)
+	     ,@fn-applies
 	     ,@(if log
 		   (list `(when *verbose* (format t ,@log))))
 	     t)
 	   (progn
 	     (when *verbose* (format t "Skip ~a~%" ,target))
 	     nil)))))
+
+(defmacro if-www (fn &rest args)
+  `(if (site-output-html-dir *site*)
+       (,fn ,@args)))
+
+(defun gemtext->html (source target)
+  (let* ((doc (with-open-file (s source)
+		(mokubune/gemtext:parse s)))
+	 (title-line (find-if #'(lambda (line)
+				  (and (mokubune/gemtext:title-p line)
+				       (= (mokubune/gemtext:title-level line) 1)))
+			      doc))
+	 (page-title (if title-line (mokubune/gemtext:line-text title-line) "Page"))
+	 (html (with-output-to-string (s)
+		 (let ((*standard-output* s))
+		   (mokubune/gemtext:gemtext->html doc))))
+	 (tpl (read-file-string (abs-tpl *html-template-file*))))
+    (ensure-directories-exist target)
+    (with-open-file (s target :direction :output
+			      :if-does-not-exist :create
+			      :if-exists :supersede)
+      (write-string (str:replace-using (list "__title__" page-title
+					     "__content__" html)
+				       tpl)
+		    s)))
+  (format t "converted ~a to ~a~%" source target))
 
 (defun process-op (op &key dir? children-out-dated)
   (when op
@@ -364,7 +394,12 @@
 	 (process-target
 	  target
 	  :if-any (children-out-dated (:deps-outdated (list (abs-src source))))
-	  :do (ensure-dir-and-copy-file source target)
+	  :do-list ((ensure-dir-and-copy-file
+		     (abs-src source)
+		     (abs-target target))
+		    (if-www ensure-dir-and-copy-file
+			    (to-absolute-path target (site-output-dir *site*))
+			    (to-absolute-path target (site-output-html-dir *site*))))
 	  :log ("Target: ~a:  copied from ~a~%" target source))))
       (:apply-template
        (let* ((source (getf op :source))
@@ -375,7 +410,12 @@
 	 (process-target
 	  target
 	  :if-any (children-out-dated (:deps-outdated deps))
-	  :do (apply-template target tpl :dir? dir?)
+	  :do-list ((apply-template (abs-target target) (abs-tpl tpl) :dir? dir?)
+		    (if-www gemtext->html
+			    (to-absolute-path target (site-output-dir *site*))
+			    (to-absolute-path
+			     (make-pathname :type "html" :defaults target)
+			     (site-output-html-dir *site*))))
 	  :log ("Target: ~a: applied template ~a to ~a~%" target tpl source)))))))
 
 (defun with-config-file (deps)
@@ -384,14 +424,12 @@
       deps))
 
 (defun ensure-dir-and-copy-file (source target)
-  (let ((source-abs (abs-src source))
-	(target-abs (abs-target target)))
-    (ensure-directories-exist target-abs)
-    (copy-file source-abs target-abs)))
+  (ensure-directories-exist target)
+  (copy-file source target))
 
 (defun apply-template (target template &key dir?)
   (let* ((target-rel (rel-target target))
-	 (target-abs (abs-target target))
+	 (target-abs target)
 	 (entity (find-entity (if dir? (directory-namestring target-rel) target-rel))))
     (ensure-directories-exist target-abs)
     (with-open-file (stream target-abs

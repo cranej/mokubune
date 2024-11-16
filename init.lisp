@@ -10,15 +10,18 @@
 (defparameter *page-template-file* "page.clt")
 (defparameter *index-template-file* "index.clt")
 (defparameter *sub-index-template-file* "sub-index.clt")
+(defparameter *html-template-file* "page.html")
 
 (defparameter *default-index-template-content* nil)
 (defparameter *default-page-template-content* nil)
+(defparameter *default-html-template-content* nil)
 
 (defstruct site
   (title "My brilliant writes" :type string)
   (content-dir "contents/" :type string)
   (template-dir "templates/" :type string)
-  (output-dir "public/" :type string)
+  (output-dir "public/gemini/" :type string)
+  (output-html-dir nil)
   (base-url "" :type string)
   (data (make-hash-table :test 'equal)))
 
@@ -50,6 +53,8 @@
 		     *default-index-template-content*)
   (write-file-string (merge-pathnames *page-template-file* (site-template-dir *site*))
 		     *default-page-template-content*)
+  (write-file-string (merge-pathnames *html-template-file* (site-template-dir *site*))
+		     *default-html-template-content*)
   (format t "Initlized.~%"))
 
 (defun write-file-string (file string)
@@ -62,9 +67,11 @@
 ;;; intended to be called in Makefile
 (defun load-default-templates-content (dir)
   (let ((index-tpl-path (merge-pathnames *index-template-file* dir))
-	(page-tpl-path (merge-pathnames *page-template-file* dir)))
+	(page-tpl-path (merge-pathnames *page-template-file* dir))
+	(html-tpl-path (merge-pathnames *html-template-file* dir)))
     (setf *default-index-template-content* (read-file-string index-tpl-path))
-    (setf *default-page-template-content* (read-file-string page-tpl-path))))
+    (setf *default-page-template-content* (read-file-string page-tpl-path))
+    (setf *default-html-template-content* (read-file-string html-tpl-path))))
 
 (defun read-file-string (file)
   (with-open-file (stream file)
@@ -87,3 +94,9 @@
   (enough-namestring path (abs-cwd (site-output-dir *site*))))
 (defun abs-target (path)
   (merge-pathnames path (abs-cwd (site-output-dir *site*))))
+
+(defun to-absolute-path (path dir)
+  (merge-pathnames path (abs-cwd dir)))
+
+(defun to-relative-path (path dir)
+  (enough-namestring path (abs-cwd dir)))
