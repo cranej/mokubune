@@ -12,6 +12,7 @@
 		:components ((:file "packages")
 			     (:file "pathnames")))
 	       (:file "packages")
+	       (:file "pattern")
 	       (:file "gemtext")
 	       (:file "version")
 	       (:file "init")

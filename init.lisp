@@ -80,23 +80,17 @@
       string)))
 
 ;;;; Utilities to deal with path
-(defun rel-src (path)
-  (enough-namestring path (abs-cwd (site-content-dir *site*))))
-(defun abs-src (path)
-  (merge-pathnames path (abs-cwd (site-content-dir *site*))))
+(defun get-base-by (type)
+  (cond ((eq type 'content) `(site-content-dir *site*))
+	((eq type 'template) `(site-template-dir *site*))
+	((eq type 'output) `(site-output-dir *site*))
+	((eq type 'html-output) `(site-output-html-dir *site*))
+	(t (error "unknown base of type ~s" type))))
 
-(defun rel-tpl (path)
-  (enough-namestring path (abs-cwd (site-template-dir *site*))))
-(defun abs-tpl (path)
-  (merge-pathnames path (abs-cwd (site-template-dir *site*))))
+(defmacro relative-to (dir path)
+  (let ((relative-to-dir (get-base-by dir)))
+    `(enough-namestring ,path (abs-cwd ,relative-to-dir))))
 
-(defun rel-target (path)
-  (enough-namestring path (abs-cwd (site-output-dir *site*))))
-(defun abs-target (path)
-  (merge-pathnames path (abs-cwd (site-output-dir *site*))))
-
-(defun to-absolute-path (path dir)
-  (merge-pathnames path (abs-cwd dir)))
-
-(defun to-relative-path (path dir)
-  (enough-namestring path (abs-cwd dir)))
+(defmacro absolute-as (dir path)
+  (let ((absolute-as-dir (get-base-by dir)))
+    `(merge-pathnames ,path (abs-cwd ,absolute-as-dir))))

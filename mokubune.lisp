@@ -4,69 +4,9 @@
 (defun default-index-type (type)
   (setf *default-index-type* type))
 
-;;;; Rule matching for individual file
-(defparameter *rules*
-  (list
-   (list "*.gmi" :apply-template)
-   (list "*" :copy)))
-
-(defparameter *allowed-actions* '(:apply-template :copy))
-
-(defun add-rule (pattern action)
-  (if (find action *allowed-actions*)
-      (push (list pattern action) *rules*)
-      (format t "Unknown action: ~s~%" action)))
-
-(defun match-rule (path)
-  (loop for (pattern fn) in *rules*
-        when (match-pattern pattern path)
-          return fn))
-
-(defun match-pattern (pattern path)
-  (loop for pattern-segment in (split-pattern pattern)
-        for pos = 0
-        for match = (match-pattern-segment pattern-segment path pos)
-        while (< pos (length path))
-        unless match
-	  return nil
-        do (setf pos match)
-        finally (return (= pos (length path)))))
-
-(defun match-pattern-segment (pattern-segment path start)
-  (cond ((zerop (length pattern-segment))
-         (if (>= start (length path))
-             (length path)))
-        ((string= "*" pattern-segment)
-         (length path))
-        ((char= #\* (char pattern-segment 0))
-         (let ((pos (search pattern-segment path :start1 1 :start2 start)))
-           (when pos
-             (+ start pos
-                (1- (length pattern-segment))))))
-        ((str:starts-with? pattern-segment path)
-         (+ start (length pattern-segment)))))
-
-(defun split-pattern (pattern)
-  (do ((len (length pattern))
-       (start 0)
-       (pattern-segments nil))
-      ((>= start len) (nreverse pattern-segments))
-      (multiple-value-bind (pattern-segment next)
-	  (read-pattern-segment pattern start)
-        (push pattern-segment pattern-segments)
-        (setf start next))))
-
-(defun read-pattern-segment (pattern start)
-  (let ((pattern-segment
-	  (make-array 5 :element-type 'character :adjustable t :fill-pointer 0)))
-    (vector-push-extend (char pattern start) pattern-segment)
-    (loop for i upfrom (1+ start) below (length pattern)
-          while (char/= #\* (char pattern i))
-          do (vector-push-extend (char pattern i) pattern-segment)
-          finally (return (values pattern-segment i)))))
-
 ;;; Functions for locating template, target, etc.
 (defun find-template (source &key (fallback t))
+  "Find applicable template file for source. Returns absolute path."
   (let ((locations (template-file-locations source)))
     (if fallback
 	(find-if #'file-exists-p locations)
@@ -77,18 +17,17 @@
 	     (cond ((string= source "") :root-dir)
 		   ((directory-pathname-p source) :sub-dir)
 		   (t :page))))
-    (let ((source (rel-src source)))
+    (let ((source (relative-to content source)))
       (ecase (what-path source)
-	(:root-dir (list (abs-tpl *index-template-file*)))
-	(:sub-dir (list (merge-pathnames *index-template-file* (abs-tpl source))
-			(abs-tpl *sub-index-template-file*)
-			(abs-tpl *index-template-file*)))
-	(:page (list (merge-pathnames *page-template-file* (abs-tpl source))
-		     (abs-tpl *page-template-file*)))))))
+	(:root-dir (list (absolute-as template *index-template-file*)))
+	(:sub-dir (list (merge-pathnames *index-template-file* (absolute-as template source))
+			(absolute-as template *sub-index-template-file*)
+			(absolute-as template *index-template-file*)))
+	(:page (list (merge-pathnames *page-template-file* (absolute-as template source))
+		     (absolute-as template *page-template-file*)))))))
 
 (defun determine-target (source)
-  (let* ((source (abs-src source))
-         (target (abs-target (rel-src source))))
+  (let* ((target (absolute-as output (relative-to content source))))
     (if (directory-pathname-p target)
 	(make-pathname :name "index" :type *default-index-type* :defaults target)
         target)))
@@ -131,7 +70,7 @@
                when (and (null title) (string/= line ""))
                  do
                     (when (str:starts-with? "#" line)
-                      (setf title (str:trim-left line :char-bag '(#\# #\Space))))
+                      (setf title (str:trim-left line :char-bag '(#\# #\Space #\Tab))))
 	       when (and (null date) (string/= line ""))
 		 do (register-groups-bind (date-from-body)
 					  ("#+\\s*(\\d{4}-\\d{2}-\\d{2})" line)
@@ -139,33 +78,13 @@
        title
        date))))
 
-(defmethod read-body ((type (eql 'file-type-org)) path)
-  (let (title
-	(date (parse-date-from-filename path)))
-    (with-open-file (stream path :element-type 'character :direction :input)
-      (list
-       (with-output-to-string (body)
-         (loop for line = (read-line stream nil nil)
-               while line
-               do (write-line line body)
-               when (and (null title) (string/= line ""))
-                 do (register-groups-bind (title-from-body)
-			("^#\\+title:\\s*(.*)" line)
-		      (setf title title-from-body))
-	       when (and (null date) (string/= line ""))
-		 do (register-groups-bind (date-from-body)
-			("^#\\+date:\\s*(\\d{4}-\\d{2}-\\d{2})" line)
-		      (setf date date-from-body))))
-       (or title (file-namestring path))
-       date))))
-
 (defun parse-page (source-file target-file)
   (let* ((type (and source-file
 		    (read-from-string
 		     (format nil "file-type-~a" (pathname-type source-file)))))
-         (body-title-date (and source-file (read-body type (abs-src source-file))))
+         (body-title-date (and source-file (read-body type (absolute-as content source-file))))
 	 (date (third body-title-date))
-         (url (rel-target target-file)))
+         (url (relative-to output target-file)))
     (make-instance 'page
                    :title (or (second body-title-date) "")
                    :url url
@@ -216,6 +135,7 @@
 
 ;;;; Entry point
 (defun run ()
+  (sb-ext:disable-debugger)
   (setf *cwd* (uiop/os:getcwd))
   (run-with-args (uiop:command-line-arguments)))
  
@@ -252,15 +172,15 @@
 	       (when (string/= (pathname-name source) "index")
 		 (build-file-entity source)))))
     (setf *root-entity* nil *dir-stack* nil)
-    (walk-directory (abs-src "") #'scan :directories t
+    (walk-directory (absolute-as content "") #'scan :directories t
 					:on-leave-dir #'(lambda (dir)
 							  (declare (ignore dir))
 							  (pop *dir-stack*)))
     *root-entity*))
 
 (defun build-dir-entity (source)
-  (let* ((source (rel-src source))       
-         (index-source (first (directory (merge-pathnames "index.*" (abs-src source)))))
+  (let* ((source (relative-to content source))       
+         (index-source (first (directory (merge-pathnames "index.*" (absolute-as content source)))))
          (tpl (find-template source :fallback index-source))
 	 (parent (first *dir-stack*))
 	 (dir-entity (create-dir-entity tpl index-source source)))
@@ -271,18 +191,18 @@
 
 (defun create-dir-entity (tpl index-source source)
   (if tpl
-      (let* ((target (rel-target (determine-target (or index-source source))))
+      (let* ((target (relative-to output (determine-target (or index-source source))))
 	     (op (make-op :apply-template target 
 			  :source (and index-source
-				       (rel-src index-source))
-			  :template (rel-tpl tpl)))
+				       (relative-to content index-source))
+			  :template (relative-to template  tpl)))
 	     (context (parse-page index-source target)))
 	(make-dir-entity source :op op :context context))
       (make-dir-entity source)))
 
 (defun build-file-entity (source)
-  (let* ((source (rel-src source))
-	 (target (rel-target (determine-target source)))
+  (let* ((source (relative-to content source))
+	 (target (relative-to output (determine-target source)))
 	 (matched
            (find-if #'(lambda (r) (match-pattern (first r) source))
 		    *rules*)))
@@ -297,7 +217,7 @@
 				    (parse-page source target))
 		  parent))
           (:apply-template
-           (let ((tpl (rel-tpl (find-template source))))
+           (let ((tpl (relative-to template  (find-template source))))
              (when tpl
 	       (insert-entity
 		(make-file-entity target
@@ -342,7 +262,7 @@
 	   (cond ((atom form) form)
 		 ((eq :deps-outdated (car form))
 		  `(apply #'deps-newer-p
-			  (abs-target ,target)
+			  (absolute-as output ,target)
 			  (with-config-file ,@(cdr form))))
 		 (t `(,@form)))))
     (let ((fn-applies (mapcar #'(lambda (fn-apply)
@@ -374,7 +294,7 @@
 	 (html (with-output-to-string (s)
 		 (let ((*standard-output* s))
 		   (mokubune/gemtext:gemtext->html doc))))
-	 (tpl (read-file-string (abs-tpl *html-template-file*))))
+	 (tpl (read-file-string (absolute-as template *html-template-file*))))
     (ensure-directories-exist target)
     (with-open-file (s target :direction :output
 			      :if-does-not-exist :create
@@ -393,29 +313,29 @@
 	     (target (getf op :target)))
 	 (process-target
 	  target
-	  :if-any (children-out-dated (:deps-outdated (list (abs-src source))))
+	  :if-any (children-out-dated (:deps-outdated (list (absolute-as content source))))
 	  :do-list ((ensure-dir-and-copy-file
-		     (abs-src source)
-		     (abs-target target))
+		     (absolute-as content source)
+		     (absolute-as output target))
 		    (if-www ensure-dir-and-copy-file
-			    (to-absolute-path target (site-output-dir *site*))
-			    (to-absolute-path target (site-output-html-dir *site*))))
+			    (absolute-as output target)
+			    (absolute-as html-output target)))
 	  :log ("Target: ~a:  copied from ~a~%" target source))))
       (:apply-template
        (let* ((source (getf op :source))
 	      (target (getf op :target))
 	      (tpl (getf op :template))
-	      (deps (list (abs-tpl tpl))))
-	 (when source (push (abs-src source) deps))
+	      (deps (list (absolute-as template tpl))))
+	 (when source (push (absolute-as content source) deps))
 	 (process-target
 	  target
 	  :if-any (children-out-dated (:deps-outdated deps))
-	  :do-list ((apply-template (abs-target target) (abs-tpl tpl) :dir? dir?)
+	  :do-list ((apply-template (absolute-as output target) (absolute-as template tpl) :dir? dir?)
 		    (if-www gemtext->html
-			    (to-absolute-path target (site-output-dir *site*))
-			    (to-absolute-path
-			     (make-pathname :type "html" :defaults target)
-			     (site-output-html-dir *site*))))
+			    (absolute-as output target)
+			    (absolute-as
+			     html-output
+			     (make-pathname :type "html" :defaults target))))
 	  :log ("Target: ~a: applied template ~a to ~a~%" target tpl source)))))))
 
 (defun with-config-file (deps)
@@ -428,7 +348,7 @@
   (copy-file source target))
 
 (defun apply-template (target template &key dir?)
-  (let* ((target-rel (rel-target target))
+  (let* ((target-rel (relative-to output target))
 	 (target-abs target)
 	 (entity (find-entity (if dir? (directory-namestring target-rel) target-rel))))
     (ensure-directories-exist target-abs)
@@ -469,11 +389,11 @@
 
 (defparameter *compiled-templates* (make-hash-table :test #'equal))
 (defun compile-template (tpl)
-  (let ((key (format nil "~a-~a" (rel-tpl tpl)
-		     (or (file-write-date (abs-tpl tpl)) ""))))
+  (let ((key (format nil "~a-~a" (relative-to template tpl)
+		     (or (file-write-date (absolute-as template tpl)) ""))))
     (or (gethash key *compiled-templates*)
 	(setf (gethash key *compiled-templates*)
-	      (with-open-file (stream (abs-tpl tpl))
+	      (with-open-file (stream (absolute-as template tpl))
 		(let ((template (make-string (file-length stream))))
 		  (read-sequence template stream)
 		  (cl-template:compile-template template)))))))

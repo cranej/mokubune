@@ -1,4 +1,14 @@
-(in-package #:mokubune/gemtext)
+#|
+Copyright 2020, 2022, 2024 Omar Polo <op@omarpolo.com>
+
+Permission to use, copy, modify, and/or distribute this software for
+any purpose with or without fee is hereby granted, provided that the
+above copyright notice and this permission notice appear in all
+copies.
+
+Modifed work Copyright 2024 Crane Jin <crane@cranejin.com>
+|#
+(in-package #:mokubune/gemtext)		
 
 (defclass element ()
   ((text :initform ""
