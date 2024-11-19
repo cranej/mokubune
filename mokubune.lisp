@@ -1,36 +1,48 @@
 (in-package #:mokubune)
 
 (defvar *default-index-type* "gmi")
-(defun default-index-type (type)
-  (setf *default-index-type* type))
 
 ;;; Functions for locating template, target, etc.
-(defun find-template (source &key (fallback t))
-  "Find applicable template file for source. Returns absolute path."
-  (let ((locations (template-file-locations source)))
+(defun find-tpl (source &key (fallback t))
+  "Find applicable template file for source."
+  (let ((locations (find-tpl-locations source)))
     (if fallback
-	(find-if #'file-exists-p locations)
-	(file-exists-p (first locations)))))
+	(find-if #'(lambda (p) (file-exists-p (abspath p))) locations)
+	(when (file-exists-p (abspath (first locations)))
+	  (first locations)))))
 
-(defun template-file-locations (source)
-  (labels ((what-path (source)
-	     (cond ((string= source "") :root-dir)
-		   ((directory-pathname-p source) :sub-dir)
-		   (t :page))))
-    (let ((source (relative-to content source)))
-      (ecase (what-path source)
-	(:root-dir (list (absolute-as template *index-template-file*)))
-	(:sub-dir (list (merge-pathnames *index-template-file* (absolute-as template source))
-			(absolute-as template *sub-index-template-file*)
-			(absolute-as template *index-template-file*)))
-	(:page (list (merge-pathnames *page-template-file* (absolute-as template source))
-		     (absolute-as template *page-template-file*)))))))
+(defun find-tpl-locations (source)
+  (let ((what-path (cond
+		     ((string= (path-identity source) "") :root-dir)
+		     ((directory-pathname-p (path-identity source)) :sub-dir)
+		     (t :page))))
+    (ecase what-path
+      (:root-dir (list (make-path :identity *index-template-file*
+				  :dir 'template)))
+      (:sub-dir (list (mapidentity (mapdir source 'template)
+				   #'(lambda (folder)
+				       (namestring
+					(merge-pathnames *index-template-file*
+							 folder))))		    
+		      (make-path :identity *sub-index-template-file*
+				 :dir 'template)
+		      (make-path :identity *index-template-file*
+				 :dir 'template)))
+      (:page (list (mapidentity (mapdir source 'template)
+				#'(lambda (pagepath)
+				    (namestring
+				     (merge-pathnames *page-template-file*
+						      pagepath))))
+		   (make-path :identity *page-template-file*
+			      :dir 'template))))))
 
-(defun determine-target (source)
-  (let* ((target (absolute-as output (relative-to content source))))
-    (if (directory-pathname-p target)
-	(make-pathname :name "index" :type *default-index-type* :defaults target)
-        target)))
+(defun determine-output (source)
+  (let* ((output (mapdir source 'output)))
+    (if (directory-pathname-p (abspath output))	
+	(pathname->path (make-pathname :name "index"
+				       :type *default-index-type*
+				       :defaults (abspath output)))
+        output)))
 
 ;;;; Page context
 (defclass page ()
@@ -47,21 +59,22 @@
 
 (defparameter *date-unknown* "unknown")
 
-(defgeneric read-body (type path)
+(defgeneric read-body (type pathname)
   (:documentation "Parse body, title, and date from file pathname and file cointent."))
 
-(defmethod read-body ((type t) path)
-  (list nil (file-namestring path) (parse-date-from-filename path)))
+(defmethod read-body ((type t) pathname)
+  (list nil (file-namestring pathname) (parse-date-from-filename pathname)))
 
-(defun parse-date-from-filename (path)
+(defun parse-date-from-filename (pathname)
   (first
    (all-matches-as-strings
-    "\\d{4}-\\d{2}-\\d{2}$" (pathname-name path))))
+    "\\d{4}-\\d{2}-\\d{2}$" (pathname-name pathname))))
 
-(defmethod read-body ((type (eql 'file-type-gmi)) path)
+(defmethod read-body ((type (eql 'file-type-gmi)) pathname)
+  (declare (type (or pathname string) pathname))
   (let (title
-	(date (parse-date-from-filename path)))
-    (with-open-file (stream path :element-type 'character :direction :input)
+	(date (parse-date-from-filename pathname)))
+    (with-open-file (stream pathname :element-type 'character :direction :input)
       (list
        (with-output-to-string (body)
          (loop for line = (read-line stream nil nil)
@@ -73,18 +86,20 @@
                       (setf title (str:trim-left line :char-bag '(#\# #\Space #\Tab))))
 	       when (and (null date) (string/= line ""))
 		 do (register-groups-bind (date-from-body)
-					  ("#+\\s*(\\d{4}-\\d{2}-\\d{2})" line)
-					  (setf date date-from-body))))
+			("#+\\s*(\\d{4}-\\d{2}-\\d{2})" line)
+		      (setf date date-from-body))))
        title
        date))))
 
-(defun parse-page (source-file target-file)
-  (let* ((type (and source-file
+(defun create-context (source output)
+  (declare (type (or null path) source output))
+  (let* ((type (and source
 		    (read-from-string
-		     (format nil "file-type-~a" (pathname-type source-file)))))
-         (body-title-date (and source-file (read-body type (absolute-as content source-file))))
+		     (format nil "file-type-~a"
+			     (pathname-type (path-identity source))))))
+         (body-title-date (and source (read-body type (abspath source))))
 	 (date (third body-title-date))
-         (url (relative-to output target-file)))
+         (url (path-identity output)))
     (make-instance 'page
                    :title (or (second body-title-date) "")
                    :url url
@@ -92,15 +107,15 @@
                    :body (or (first body-title-date) ""))))
 
 ;;;; Tree like structure of entities that needs to be processed
-;;; op - (:action action :target target-file-path :source source-file-path :template template-file-path)
+;;; op - (:action action :output target-file-path :source source-file-path :template template-file-path)
 ;;; context - page
 ;;; entity - (:name "last-path-seg" :op op :ctx context :files (file-entities) :dirs (dir-entities))
 (defparameter *root-entity* nil)
 
 (defun find-entity (path &optional (root *root-entity*))
+  (declare (type (or string pathname) path))
   (if (string= (namestring path) "")
       (and (string= (getf root :name) "") root)
-
       (let ((directory-parts (rest (pathname-directory path)))
 	    (file (if (directory-pathname-p path) nil (file-namestring path))))
 	(loop with current = root
@@ -108,24 +123,29 @@
 	      while current
 	      when (null current-dir-target)
 		do (if file
-		       (return (find-if #'(lambda (e) (string= file (getf e :name)))
+		       (return (find-if #'(lambda (e)
+					    (string= file (getf e :name)))
 					(getf current :files)))
 		       (return current))
 	      do
 		 (setf current (find-if #'(lambda (e)
-					    (string= current-dir-target (getf e :name)))
+					    (string= current-dir-target
+						     (getf e :name)))
 					(getf current :dirs)))
 		 (pop directory-parts)))))
 
-(defun make-op (action target &key source template)
-  (list :action action :target target :source source :template template))
+(defun make-op (action output &key source template)
+  (declare (type (or null path) source output template))
+  (list :action action :output output :source source :template template))
 
 (defun make-file-entity (path op contex)
+  (declare (type (or string pathname) path))
   (list :name (file-namestring path) :op op :ctx contex))
 
 ;;; All properties have to be set even the values are nil
 ;;; - need this to make sure we can updating the nested entity
 (defun make-dir-entity (path &key op context files dirs)
+  (declare (type (or string pathname) path))
   (let* ((path-dir (pathname-directory path))
 	 (name (if (null path-dir) "" (car (last path-dir)))))
     (list :name name :op op :ctx context :files files :dirs dirs)))
@@ -166,65 +186,74 @@
 (defparameter *dir-stack* nil)
 (defun scan-entities ()
   "Walk content directory and build the root entity structure"
-  (flet ((scan (source)
-	   (if (directory-pathname-p source)
-	       (build-dir-entity source)
-	       (when (string/= (pathname-name source) "index")
-		 (build-file-entity source)))))
-    (setf *root-entity* nil *dir-stack* nil)
-    (walk-directory (absolute-as content "") #'scan :directories t
-					:on-leave-dir #'(lambda (dir)
-							  (declare (ignore dir))
-							  (pop *dir-stack*)))
-    *root-entity*))
+  (let ((content-absolute-path (abs-cwd (site-content-dir *site*))))
+   (labels ((convert-path (source)
+	      (make-path :identity (enough-namestring source content-absolute-path)
+			 :dir 'content))
+	    (process-entity (source)
+	      (if (directory-pathname-p source)
+		  (build-dir-entity (convert-path source))
+		  (when (string/= (pathname-name source) "index")
+		    (build-file-entity (convert-path source))))))
+     (setf *root-entity* nil *dir-stack* nil)
+     (walk-directory content-absolute-path #'process-entity
+		     :directories t
+		     :on-leave-dir #'(lambda (dir)
+				       (declare (ignore dir))
+				       (pop *dir-stack*)))
+     *root-entity*)))
 
-(defun build-dir-entity (source)
-  (let* ((source (relative-to content source))       
-         (index-source (first (directory (merge-pathnames "index.*" (absolute-as content source)))))
-         (tpl (find-template source :fallback index-source))
+(defun build-dir-entity (path)
+  (declare (type path path))
+  (let* ((index-file
+	   (pathname->path
+	    (first (directory (merge-pathnames "index.*" (abspath path))))))
+         (tpl (find-tpl path :fallback index-file))
 	 (parent (first *dir-stack*))
-	 (dir-entity (create-dir-entity tpl index-source source)))
+	 (dir-entity (create-dir-entity tpl index-file path)))
     (if parent
 	(insert-entity dir-entity parent :dir? t)
 	(setf *root-entity* dir-entity))
     (push dir-entity *dir-stack*)))
 
-(defun create-dir-entity (tpl index-source source)
+(defun create-dir-entity (tpl index-file path)
+  (declare (type (or null path) index-file tpl)
+	   (type path path))
   (if tpl
-      (let* ((target (relative-to output (determine-target (or index-source source))))
-	     (op (make-op :apply-template target 
-			  :source (and index-source
-				       (relative-to content index-source))
-			  :template (relative-to template  tpl)))
-	     (context (parse-page index-source target)))
-	(make-dir-entity source :op op :context context))
-      (make-dir-entity source)))
+      (let* ((output (determine-output (or index-file path)))
+	     (op (make-op :apply-template output
+			  :source index-file
+			  :template tpl))
+	     (context (create-context index-file output)))
+	(make-dir-entity (path-identity path) :op op :context context))
+      (make-dir-entity (path-identity path))))
 
-(defun build-file-entity (source)
-  (let* ((source (relative-to content source))
-	 (target (relative-to output (determine-target source)))
-	 (matched
-           (find-if #'(lambda (r) (match-pattern (first r) source))
-		    *rules*)))
+(defun build-file-entity (path)
+  (declare (type path path))
+  (let ((output (determine-output path))
+	(matched
+          (find-if #'(lambda (r)
+		       (match-pattern (first r) (path-identity path)))
+		   *rules*)))
     (when matched
       (let ((parent (first *dir-stack*)))
 	(unless parent
-	  (error "dir-stack is nil while processing file ~a~%" target))
+	  (error "dir-stack is nil while processing file ~a~%" output))
 	(case (second matched)
           (:copy (insert-entity
-		  (make-file-entity target
-				    (make-op :copy target :source source)
-				    (parse-page source target))
+		  (make-file-entity (path-identity output)
+				    (make-op :copy output :source path)
+				    (create-context path output))
 		  parent))
           (:apply-template
-           (let ((tpl (relative-to template  (find-template source))))
+           (let ((tpl (find-tpl path)))
              (when tpl
 	       (insert-entity
-		(make-file-entity target
-				  (make-op :apply-template target
-					   :source source
+		(make-file-entity (path-identity output)
+				  (make-op :apply-template output
+					   :source path
 					   :template tpl)
-				  (parse-page source target))
+				  (create-context path output))
 		parent)))))))))
 
 (defun sort-entities (&optional (root *root-entity*))
@@ -246,29 +275,30 @@
 
 (defun process-entities (&optional (root *root-entity*))
   "Process entities in a post-order traverse"
-  (let ((children-out-dated nil))
+  (let ((tree-outdated nil))
     (dolist (file (getf root :files))
       (when (process-op (getf file :op))
-	(setf children-out-dated t)))
+	(setf tree-outdated t)))
     (dolist (dir (getf root :dirs))
       (when (process-entities dir)
-	(setf children-out-dated t)))
-    (when (process-op (getf root :op) :dir? t :children-out-dated children-out-dated)
-      (setf children-out-dated t))
-    children-out-dated))
+	(setf tree-outdated t)))
+    (when (process-op (getf root :op) :dir? t :tree-outdated tree-outdated)
+      (setf tree-outdated t))
+    tree-outdated))
 
-(defmacro process-target (target &key if-any do-list log)
+(defmacro gen-output (output &key if-any do-list log)
   (flet ((if-form (form)
 	   (cond ((atom form) form)
 		 ((eq :deps-outdated (car form))
 		  `(apply #'deps-newer-p
-			  (absolute-as output ,target)
+			  ,output
 			  (with-config-file ,@(cdr form))))
 		 (t `(,@form)))))
-    (let ((fn-applies (mapcar #'(lambda (fn-apply)
-				  (destructuring-bind (fn &rest args) fn-apply
-				      `(,fn ,@args)))
-			      do-list)))
+    (let ((fn-applies
+	    (mapcar #'(lambda (fn-apply)
+			(destructuring-bind (fn &rest args) fn-apply
+			  `(,fn ,@args)))
+		    do-list)))
       `(if (or ,@(mapcar #'if-form if-any))
 	   (progn
 	     ,@fn-applies
@@ -276,83 +306,88 @@
 		   (list `(when *verbose* (format t ,@log))))
 	     t)
 	   (progn
-	     (when *verbose* (format t "Skip ~a~%" ,target))
+	     (when *verbose* (format t "Skip ~a~%" ,output))
 	     nil)))))
 
 (defmacro if-www (fn &rest args)
-  `(if (site-output-html-dir *site*)
+  `(if (site-html-output-dir *site*)
        (,fn ,@args)))
 
-(defun gemtext->html (source target)
-  (let* ((doc (with-open-file (s source)
+(defun gemtext->html (source output)
+  (declare (type path source output))
+  (let* ((doc (with-open-file (s (abspath source))
 		(mokubune/gemtext:parse s)))
-	 (title-line (find-if #'(lambda (line)
-				  (and (mokubune/gemtext:title-p line)
-				       (= (mokubune/gemtext:title-level line) 1)))
-			      doc))
-	 (page-title (if title-line (mokubune/gemtext:line-text title-line) "Page"))
+	 (title-line
+	   (find-if #'(lambda (line)
+			(and (mokubune/gemtext:title-p line)
+			     (= (mokubune/gemtext:title-level line) 1)))
+		    doc))
+	 (page-title (if title-line
+			 (mokubune/gemtext:line-text title-line)
+			 "Page"))
 	 (html (with-output-to-string (s)
 		 (let ((*standard-output* s))
 		   (mokubune/gemtext:gemtext->html doc))))
-	 (tpl (read-file-string (absolute-as template *html-template-file*))))
-    (ensure-directories-exist target)
-    (with-open-file (s target :direction :output
-			      :if-does-not-exist :create
-			      :if-exists :supersede)
+	 (tpl (read-file-string
+	       (abspath (make-path :identity *html-template-file*
+				   :dir 'template))))
+	 (abs-output (abspath output)))
+    (ensure-directories-exist abs-output)
+    (with-open-file (s abs-output :direction :output
+				  :if-does-not-exist :create
+				  :if-exists :supersede)
       (write-string (str:replace-using (list "__title__" page-title
 					     "__content__" html)
 				       tpl)
 		    s)))
-  (format t "converted ~a to ~a~%" source target))
+  (format t "converted ~a to ~a~%" source output))
 
-(defun process-op (op &key dir? children-out-dated)
+(defun process-op (op &key dir? tree-outdated)
   (when op
     (ecase (getf op :action)
       (:copy
        (let ((source (getf op :source))
-	     (target (getf op :target)))
-	 (process-target
-	  target
-	  :if-any (children-out-dated (:deps-outdated (list (absolute-as content source))))
-	  :do-list ((ensure-dir-and-copy-file
-		     (absolute-as content source)
-		     (absolute-as output target))
+	     (output (getf op :output)))
+	 (gen-output
+	  output
+	  :if-any (tree-outdated
+		   (:deps-outdated (list source)))
+	  :do-list ((ensure-dir-and-copy-file source output)
 		    (if-www ensure-dir-and-copy-file
-			    (absolute-as output target)
-			    (absolute-as html-output target)))
-	  :log ("Target: ~a:  copied from ~a~%" target source))))
+			    output
+			    (mapdir output 'html-output)))
+	  :log ("Target: ~a:  copied from ~a~%" output source))))
       (:apply-template
        (let* ((source (getf op :source))
-	      (target (getf op :target))
+	      (output (getf op :output))
 	      (tpl (getf op :template))
-	      (deps (list (absolute-as template tpl))))
-	 (when source (push (absolute-as content source) deps))
-	 (process-target
-	  target
-	  :if-any (children-out-dated (:deps-outdated deps))
-	  :do-list ((apply-template (absolute-as output target) (absolute-as template tpl) :dir? dir?)
+	      (deps (list tpl)))
+	 (when source (push source deps))
+	 (gen-output
+	  output
+	  :if-any (tree-outdated (:deps-outdated deps))
+	  :do-list ((apply-template output tpl :dir? dir?)
 		    (if-www gemtext->html
-			    (absolute-as output target)
-			    (absolute-as
-			     html-output
-			     (make-pathname :type "html" :defaults target))))
-	  :log ("Target: ~a: applied template ~a to ~a~%" target tpl source)))))))
+			    output
+			    (change-ext (mapdir output 'html-output) "html")))
+	  :log ("Target: ~a: applied template ~a to ~a~%" output tpl source)))))))
 
 (defun with-config-file (deps)
   (if *runtime-config-file*
       (cons *runtime-config-file* deps)
       deps))
 
-(defun ensure-dir-and-copy-file (source target)
-  (ensure-directories-exist target)
-  (copy-file source target))
+(defun ensure-dir-and-copy-file (source output)
+  (ensure-directories-exist (abspath output))
+  (copy-file (abspath source) (abspath output)))
 
-(defun apply-template (target template &key dir?)
-  (let* ((target-rel (relative-to output target))
-	 (target-abs target)
-	 (entity (find-entity (if dir? (directory-namestring target-rel) target-rel))))
-    (ensure-directories-exist target-abs)
-    (with-open-file (stream target-abs
+(defun apply-template (output template &key dir?)
+  (let ((output-abs (abspath output))
+	(entity (find-entity (if dir?
+				 (directory-namestring (path-identity output))
+				 (path-identity output)))))
+    (ensure-directories-exist output-abs)
+    (with-open-file (stream output-abs
 			    :element-type 'character
 			    :direction :output
 			    :if-exists :supersede)
@@ -363,7 +398,8 @@
 	'(#\Nul)
 	(funcall (compile-template template)
 		 (list :page (getf entity :ctx)
-		       :page-parent (parent-url target-rel :dir? dir?)
+		       :page-parent (parent-url (path-identity output)
+						:dir? dir?)
 		       :children (get-entity-file-contexts entity) 
 		       :site *site*)))
        stream))))
@@ -380,20 +416,25 @@
       (format nil "/~@[~{~a/~}~]" (butlast (cdr (pathname-directory target))))
       (format nil "/~a" (directory-namestring target))))
 
-(defun deps-newer-p (target &rest deps)
-  (if (file-exists-p target)
-      (let ((target-write-date (file-write-date target)))
-	(some #'(lambda (file) (>= (file-write-date file) target-write-date))
+(defun deps-newer-p (output &rest deps)
+  (if (file-exists-p (abspath output))
+      (let ((output-write-date (file-write-date (abspath output))))
+	(some #'(lambda (file)
+		  (>= (file-write-date (if (typep file 'path)
+					   (abspath file)
+					   file))
+		      output-write-date))
 	      deps))
       t))
 
 (defparameter *compiled-templates* (make-hash-table :test #'equal))
 (defun compile-template (tpl)
-  (let ((key (format nil "~a-~a" (relative-to template tpl)
-		     (or (file-write-date (absolute-as template tpl)) ""))))
+  (declare (type path tpl))
+  (let ((key (format nil "~a-~a" (path-identity tpl)
+		     (or (file-write-date (abspath tpl)) ""))))
     (or (gethash key *compiled-templates*)
 	(setf (gethash key *compiled-templates*)
-	      (with-open-file (stream (absolute-as template tpl))
+	      (with-open-file (stream (abspath tpl))
 		(let ((template (make-string (file-length stream))))
 		  (read-sequence template stream)
 		  (cl-template:compile-template template)))))))

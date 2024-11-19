@@ -4,8 +4,8 @@
 (defun set-working-directory (wd)
   (setf *cwd* wd))
 
-(defun abs-cwd (path)
-  (merge-pathnames path *cwd*))
+(defun abs-cwd (pathname)
+  (merge-pathnames pathname *cwd*))
 
 (defparameter *page-template-file* "page.clt")
 (defparameter *index-template-file* "index.clt")
@@ -21,7 +21,7 @@
   (content-dir "contents/" :type string)
   (template-dir "templates/" :type string)
   (output-dir "public/gemini/" :type string)
-  (output-html-dir nil)
+  (html-output-dir nil)
   (base-url "" :type string)
   (data (make-hash-table :test 'equal)))
 
@@ -42,19 +42,20 @@
 (defvar *verbose* nil)
 (defun be-verbose () (setf *verbose* t))
 
+(defparameter *tpl-to-init*
+  (list (cons *index-template-file* *default-index-template-content*)
+	(cons *page-template-file* *default-page-template-content*)
+	(cons *html-template-file* *default-html-template-content*)))
+
 (defun do-init ()
-  (uiop/run-program:run-program
-   (list "mkdir" (site-content-dir *site*)) :force-shell t)
-  (uiop/run-program:run-program
-   (list "mkdir" (site-template-dir *site*)) :force-shell t)
-  (uiop/run-program:run-program
-   (list "mkdir" (site-output-dir *site*)) :force-shell t)
-  (write-file-string (merge-pathnames *index-template-file* (site-template-dir *site*))
-		     *default-index-template-content*)
-  (write-file-string (merge-pathnames *page-template-file* (site-template-dir *site*))
-		     *default-page-template-content*)
-  (write-file-string (merge-pathnames *html-template-file* (site-template-dir *site*))
-		     *default-html-template-content*)
+  (dolist (dir (list (site-content-dir *site*)
+		     (site-template-dir *site*)
+		     (site-output-dir *site*)))
+    (uiop/run-program:run-program
+     (list "mkdir" "-p" dir) :force-shell t))
+  (dolist (tpl *tpl-to-init*)
+    (write-file-string (merge-pathnames (car tpl) (site-template-dir *site*))
+		       (cdr tpl)))
   (format t "Initlized.~%"))
 
 (defun write-file-string (file string)
@@ -66,12 +67,8 @@
 
 ;;; intended to be called in Makefile
 (defun load-default-templates-content (dir)
-  (let ((index-tpl-path (merge-pathnames *index-template-file* dir))
-	(page-tpl-path (merge-pathnames *page-template-file* dir))
-	(html-tpl-path (merge-pathnames *html-template-file* dir)))
-    (setf *default-index-template-content* (read-file-string index-tpl-path))
-    (setf *default-page-template-content* (read-file-string page-tpl-path))
-    (setf *default-html-template-content* (read-file-string html-tpl-path))))
+  (dolist (tpl *tpl-to-init*)
+    (setf (cdr tpl) (read-file-string (merge-pathnames (car tpl) dir)))))
 
 (defun read-file-string (file)
   (with-open-file (stream file)
@@ -79,18 +76,62 @@
       (read-sequence string stream)
       string)))
 
-;;;; Utilities to deal with path
-(defun get-base-by (type)
-  (cond ((eq type 'content) `(site-content-dir *site*))
-	((eq type 'template) `(site-template-dir *site*))
-	((eq type 'output) `(site-output-dir *site*))
-	((eq type 'html-output) `(site-output-html-dir *site*))
-	(t (error "unknown base of type ~s" type))))
+(deftype dirs () '(member content template output html-output))
+(defstruct path
+  (identity nil :type string)
+  (dir 'content :type dirs))
 
-(defmacro relative-to (dir path)
-  (let ((relative-to-dir (get-base-by dir)))
-    `(enough-namestring ,path (abs-cwd ,relative-to-dir))))
+(defmethod print-object ((object path) stream) 
+  (format stream "~s/~a" (path-dir object) (path-identity object)))
 
-(defmacro absolute-as (dir path)
-  (let ((absolute-as-dir (get-base-by dir)))
-    `(merge-pathnames ,path (abs-cwd ,absolute-as-dir))))
+(defun dir->pathname (dir)
+  (ecase dir
+    (content (site-content-dir *site*))
+    (template (site-template-dir *site*))
+    (output (site-output-dir *site*))
+    (html-output (site-html-output-dir *site*))))
+
+(defun abspath (path)
+  (let ((dir-path (dir->pathname (path-dir path))))
+    (merge-pathnames (path-identity path) (abs-cwd dir-path))))
+
+(defun mapdir (path dir)
+  (declare (type dirs dir)
+	   (type path path))
+  (let ((new-path (copy-structure path)))
+    (setf (path-dir new-path) dir)
+    new-path))
+
+(defun mapidentity (path mapfn)
+  (declare (type path path)
+	   (ftype (function (string) string) mapfn))
+  (let ((new-path (copy-structure path)))
+    (setf (path-identity new-path)
+	  (funcall mapfn (path-identity path)))
+    new-path))
+
+(defun change-ext (path ext)
+  (declare (type path path)
+	   (type string ext))
+  (mapidentity path
+	       #'(lambda (identity)
+		   (namestring (make-pathname :type ext :defaults identity)))))
+
+(defun pathname->dir (p)
+  (let ((short-path (enough-namestring p *cwd*)))
+    (cond ((str:starts-with? (site-content-dir *site*) short-path)
+	   'content)
+	  ((str:starts-with? (site-template-dir *site*) short-path)
+	   'template)
+	  ((str:starts-with? (site-output-dir *site*) short-path)
+	   'output)
+	  ((str:starts-with? (site-html-output-dir *site*) short-path)
+	   'html-output)
+	  (t (error "unknown path dir of ~a" p)))))
+
+(defun pathname->path (p)
+  (when p
+    (let* ((dir (pathname->dir p))
+	   (dir-path (dir->pathname dir)))
+      (make-path :identity (enough-namestring p (abs-cwd dir-path))
+		 :dir dir))))
