@@ -1,5 +1,5 @@
 (defpackage #:mokubune
-  (:use :common-lisp :com.gigamonkeys.pathnames :cl-ppcre)
+  (:use :common-lisp :cl-ppcre)
   (:import-from :alexandria-2 :copy-file)
   (:export #:run))
 
@@ -25,4 +25,5 @@
 	   #:paragraph-p
 	   #:blockquote-p
 	   #:verbatim-p
-	   #:gemtext->html))
+	   #:gemtext->html
+           #:*rewrite-file-types*))

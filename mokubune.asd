@@ -2,19 +2,19 @@
 (in-package #:mokubune-system)
 
 (defsystem "mokubune"
-  :author "cranej <crane@cranejin.com>"
+  :author "Jin, ChunHe <crane@cranejin.com>"
   :version (:read-file-form "version.lisp" :at (1 2))
   :description "A static site generator."
   :licence "GPL"
   :serial t
-  :components ((:module "pathnames"
+  :components ((:file "src/packages")
+               (:file "version")
+               (:module "src"
 		:serial t
-		:components ((:file "packages")
-			     (:file "pathnames")))
-	       (:file "packages")
-	       (:file "pattern")
-	       (:file "gemtext")
-	       (:file "version")
-	       (:file "init")
-               (:file "mokubune"))
-  :depends-on ("alexandria" "str" "cl-ppcre" "cl-template-trim"))
+		:components ((:file "gemtext")
+	                     (:file "init")
+                             (:file "path")
+                             (:file "page")
+                             (:file "stage")
+                             (:file "mokubune"))))
+  :depends-on ("alexandria" "str" "cl-ppcre" "cl-glob" "cl-template-trim" "cl-fad"))

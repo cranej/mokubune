@@ -11,7 +11,11 @@ mokubune has been tested only on SBCL and Linux.
 
 The Dependencies are:
 * A working Quicklisp installation.
-* cl-template-trim - it's currently not on Quicklisp, so you need to download it from here[1]  and put to somewhere your ASDF can locate.
+* cl-template-trim
+* cl-glob
+
+=> https://codeberg.org/cranej/cl-glob cl-glob
+=> https://codeberg.org/cranej/cl-template-trim cl-template-trim
 
 Install:
 ```

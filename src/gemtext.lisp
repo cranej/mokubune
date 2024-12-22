@@ -123,12 +123,17 @@ Can be a programming language name or alternative text for, e.g., ASCII art.")))
     "<" "&lt;"
     (str:replace-all "&" "&amp;" str))))
 
+(defvar *rewrite-file-types* (list ".gmi"))
 (defun url-replace (url)
-  (if (and
-	 (uiop:string-prefix-p "/" url)
-	 (uiop:string-suffix-p url ".gmi"))
-      (str:concat (str:substring 0 (- (length url) 4) url) ".html")
-      url))
+  (let ((type (and
+               (uiop:string-prefix-p "/" url)
+               (find-if #'(lambda (type)
+                            (uiop:string-suffix-p url type))
+                        *rewrite-file-types*))))
+    (if type
+        (str:concat (str:substring 0 (position #\. url :from-end t) url)
+                    ".html")
+        url)))
 
 (defun non-item->html (ele)
   (cond ((paragraph-p ele)

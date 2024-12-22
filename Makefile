@@ -4,12 +4,12 @@ ifndef PREFIX
   PREFIX = /usr/local
 endif
 
-bin/mokubune: *.lisp mokubune.asd default-templates/*
+bin/mokubune: src/*.lisp mokubune.asd default-templates/* examples/*
 	mkdir -p "$(@D)"
 	sbcl --noinform --eval "(ql:quickload \"mokubune\")" \
 		--eval "(in-package #:mokubune)" \
-		--eval "(load-default-templates-content \"$(CURDIR)/default-templates/\")" \
-		--eval "(sb-ext:save-lisp-and-die \"$@\" :toplevel 'run :executable t :save-runtime-options t)" \
+		--eval "(load-resource-files  \"$(CURDIR)/\")" \
+		--eval "(sb-ext:save-lisp-and-die \"$@\" :toplevel 'run :executable t :save-runtime-options t :compression t)" \
 		--eval '(exit)'
 
 clean:
