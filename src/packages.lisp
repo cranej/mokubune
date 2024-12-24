@@ -1,6 +1,5 @@
 (defpackage #:mokubune
   (:use :common-lisp :cl-ppcre)
-  (:import-from :alexandria-2 :copy-file)
   (:export #:run))
 
 (defpackage #:mokubune/gemtext

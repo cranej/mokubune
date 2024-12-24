@@ -1,12 +1,12 @@
 (in-package #:mokubune)
 
-;;; TODO: rename field names
 (defstruct path
-  (identity "" :type simple-string)
-  (dir "" :type simple-string))
+  "Represent a path relative to *cwd*. For exampe, for *cwd* \"/my/path/to/cwd/\", pathname \"/my/path/to/cwd/contents/blog/a-post-2024-11-10.gmi\" is represented as a ``path`` object with \"blog/a-post-2024-11-10.gmi\" as the ``relative`` slot, and \"contents/\" as  the ``base`` slot. "
+  (relative "" :type simple-string)
+  (base "" :type simple-string))
 
 (defmethod print-object ((object path) stream) 
-  (format stream "~a:~a" (path-dir object) (path-identity object)))
+  (format stream "~a:~a" (path-base object) (path-relative object)))
 
 (defun ensure-absolute (pathspec)
   (if (cl-fad:pathname-absolute-p pathspec)
@@ -16,13 +16,13 @@
 (defun pathname->path (pathname &optional (base *cwd*))
   (let ((pathname (ensure-absolute pathname))
         (base (ensure-absolute base)))
-    (let ((identity (enough-namestring pathname base))
-          (dir (enough-namestring base *cwd*)))
-      (make-path :identity identity :dir dir))))
+    (let ((relative (enough-namestring pathname base))
+          (base (enough-namestring base *cwd*)))
+      (make-path :relative relative :base base))))
 
 (defun path->pathname (path)
-  (merge-pathnames* (path-identity path)
-                    (merge-pathnames* (path-dir path)
+  (merge-pathnames* (path-relative path)
+                    (merge-pathnames* (path-base path)
                                       *cwd*)))
 
 ;; TODO: get rid of this
@@ -30,27 +30,27 @@
   (cl-fad:pathname-equal (make-pathname :version nil :defaults a)
                          (make-pathname :version nil :defaults b)))
 
-(defmacro with-path (path &key (dir nil dir-supplied-p)
-                            (identity nil identity-supplied-p)
+(defmacro with-path (path &key (base nil base-supplied-p)
+                            (relative nil relative-supplied-p)
                             (filename nil filename-supplied-p)
                             (type nil type-supplied-p))
   (let ((newobj (gensym))
         (setfs nil))
-    (when dir-supplied-p
-      (push `(setf (path-dir ,newobj) ,dir) setfs))
-    (if identity-supplied-p
-        (push `(setf (path-identity ,newobj) ,identity) setfs)
+    (when base-supplied-p
+      (push `(setf (path-base ,newobj) ,base) setfs))
+    (if relative-supplied-p
+        (push `(setf (path-relative ,newobj) ,relative) setfs)
         (if filename-supplied-p
-            (push `(setf (path-identity ,newobj)
+            (push `(setf (path-relative ,newobj)
                          (namestring
                           (merge-pathnames* ,filename
-                                            (path-identity ,path))))
+                                            (path-relative ,path))))
                   setfs)
             (when type-supplied-p
-              (push `(setf (path-identity ,newobj)
+              (push `(setf (path-relative ,newobj)
                            (namestring
                             (make-pathname :type ,type
-                                           :defaults (path-identity ,path))))
+                                           :defaults (path-relative ,path))))
                     setfs))))
     `(let ((,newobj (copy-path ,path)))
        ,@setfs 

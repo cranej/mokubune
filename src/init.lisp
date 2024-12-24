@@ -9,9 +9,6 @@
 (defmacro merge-pathnames* (pathname default)
   `(make-pathname :version nil :defaults (merge-pathnames ,pathname ,default)))
 
-(defun dir-of (file)
-  (make-pathname :name nil :type nil :version nil :defaults file))
-
 (defvar *cwd* (uiop/os:getcwd))
 (defun set-working-directory (wd)
   (setf *cwd* wd))
@@ -94,7 +91,8 @@
 			  :if-does-not-exist :create)
     (write-sequence string stream)))
 
-;;; intended to be called in Makefile
+;;; Intended to be called in Makefile. Read resource files
+;;;  into variables, so their contents are included in the final binary (saved image).
 (defun load-resource-files (dir)
   (dolist (tpl *tpl-to-init*)
     (setf (cdr tpl)

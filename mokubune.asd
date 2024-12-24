@@ -17,4 +17,4 @@
                              (:file "page")
                              (:file "stage")
                              (:file "mokubune"))))
-  :depends-on ("alexandria" "str" "cl-ppcre" "cl-glob" "cl-template-trim" "cl-fad"))
+  :depends-on ("str" "cl-ppcre" "cl-glob" "cl-template-trim" "cl-fad"))

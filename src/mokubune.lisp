@@ -3,21 +3,21 @@
 ;;; predicate helpers for rules
 (defun glob-match (pattern)
   (let ((pat (cl-glob:compile-pattern pattern)))
-   (lambda (name)
-     (cl-glob:glob-matches-compiled pat name))))
+   (lambda (path)
+     (cl-glob:glob-matches-compiled pat (path-relative path)))))
 
 (defun is-type (type)
-  (lambda (name)
-    (string= type (pathname-type name))))
+  (lambda (path)
+    (string= type (pathname-type (path-relative path)))))
 
 ;;; actions for rules
 (defun apply-template (path)
   (let ((tpl (find-template-for path)))
     (unless tpl
       (error "Could not find template for ~a" path))
-    
+
     (let* ((out (with-path path
-                  :dir (context-output)))
+                  :base (context-output)))
            (deps (with-config-file (list path tpl)))
            (page (create-page path out)))
       (let ((regen (should-regenerate-p out deps)))
@@ -28,13 +28,13 @@
 
 (defun gemtext->html (input)
   (declare (type path input))
-  (let* ((output (with-path input :dir (context-output) :type "html"))         
+  (let* ((output (with-path input :base (context-output) :type "html"))
          (tpl (with-path input
-                :dir (site-template-dir *site*)
-                :identity +html-template-file+))
+                :base (site-template-dir *site*)
+                :relative +html-template-file+))
          (deps (with-config-file (list input tpl)))
          (regen (should-regenerate-p output deps)))
-    (if regen 
+    (if regen
         (let* ((doc (with-open-file (s (path->pathname input))
 		      (mokubune/gemtext:parse s)))
 	       (title-line
@@ -64,7 +64,7 @@
 
 (defun rst->html (input)
   (declare (type path input))
-  (let* ((out (with-path input :dir (context-output) :type "html"))
+  (let* ((out (with-path input :base (context-output) :type "html"))
          (deps (with-config-file (list input)))
          (regen (should-regenerate-p out deps)))
     (if regen
@@ -79,19 +79,19 @@
 
 (defun copy (path)
   (let ((out (with-path path
-               :dir (context-output))))    
-    (let ((updated (do-copy-file path out)))     
+               :base (context-output))))
+    (let ((updated (do-copy-file path out)))
       (values (create-page path out)
               updated))))
 
 (defun copy-as-type (type &optional append)
   (lambda (path)
     (let ((out (if append
-                   (with-path path :dir (context-output)
+                   (with-path path :base (context-output)
                      :filename (format nil "~a.~a"
-                                       (file-namestring (path-identity path))
+                                       (file-namestring (path-relative path))
                                        type))
-                   (with-path path :dir (context-output) :type type))))
+                   (with-path path :base (context-output) :type type))))
       (let ((updated (do-copy-file path out)))
         (values (create-page path out)
                 updated)))))
@@ -105,7 +105,7 @@
                 (file-write-date dest)))
         (progn
           (ensure-directories-exist dest)
-          (copy-file src dest)
+          (uiop:copy-file src dest)
           t)
         nil)))
 
@@ -121,32 +121,32 @@
 (defun find-template-for (path)
   (let ((template-dir (site-template-dir *site*)))
     (let ((tpl-pathname
-            (cond ((or (string= "" (path-identity path))
-                       (and (null (pathname-directory (path-identity path)))
-                            (string= "index" (pathname-name (path-identity path)))))
+            (cond ((or (string= "" (path-relative path))
+                       (and (null (pathname-directory (path-relative path)))
+                            (string= "index" (pathname-name (path-relative path)))))
                    (probe-path
-                    (make-path :dir template-dir
-                               :identity +index-template-file+)))
-                  ((string= (pathname-name (path-identity path)) "index")
+                    (make-path :base template-dir
+                               :relative +index-template-file+)))
+                  ((string= (pathname-name (path-relative path)) "index")
                    (or (probe-path (with-path path
-                                     :dir template-dir
+                                     :base template-dir
                                      :filename +index-template-file+))
                        (probe-path (with-path path
-                                     :dir template-dir
-                                     :identity +sub-index-template-file+))
+                                     :base template-dir
+                                     :relative +sub-index-template-file+))
                        (probe-path (with-path path
-                                     :dir template-dir
-                                     :identity +index-template-file+))))
-                  ((cl-fad:directory-pathname-p (path-identity path))
+                                     :base template-dir
+                                     :relative +index-template-file+))))
+                  ((cl-fad:directory-pathname-p (path-relative path))
                    (probe-path (with-path path
-                                 :dir template-dir
+                                 :base template-dir
                                  :filename +index-template-file+)))
                   (t (or (probe-path (with-path path
-                                       :dir template-dir
+                                       :base template-dir
                                        :filename +page-template-file+))
                          (probe-path (with-path path
-                                       :dir template-dir
-                                       :identity +page-template-file+)))))))
+                                       :base template-dir
+                                       :relative +page-template-file+)))))))
       (and tpl-pathname
            (pathname->path tpl-pathname template-dir)))))
 
@@ -169,7 +169,7 @@
         '(#\Nul)
         (funcall (compile-template tpl)
 		 (list :page page-obj
-		       :page-parent (parent-url (path-identity output))
+		       :page-parent (parent-url (path-relative output))
 		       :children children
 		       :site *site*)))
        stream))))
@@ -177,7 +177,7 @@
 (defparameter *compiled-templates* (make-hash-table :test #'equal))
 (defun compile-template (tpl)
   (declare (type path tpl))
-  (let ((key (format nil "~a-~a" (path-identity tpl)
+  (let ((key (format nil "~a-~a" (path-relative tpl)
 		     (or (file-write-date (path->pathname tpl)) ""))))
     (or (gethash key *compiled-templates*)
 	(setf (gethash key *compiled-templates*)
@@ -188,7 +188,8 @@
 
 ;;; walking related
 (defvar *walking-state*)
-(defvar *walking-context* nil)
+(defvar *walking-context* nil
+  "Context object while processing a stage, a plist in form ``(:stage stage :input stage-input-directory)``.")
 
 (defun context-input ()
   (getf *walking-context* :input))
@@ -204,7 +205,7 @@
    (let ((path (pathname->path name (getf *walking-context* :input))))
      (let ((action
              (cadr (find-if #'(lambda (rule)
-                                (funcall (car rule) (path-identity path)))
+                                (funcall (car rule) path))
                             (stage-rules (getf *walking-context* :stage))))))
        (if action
            (multiple-value-bind (obj updated) (funcall action path)
@@ -215,18 +216,20 @@
                    *walking-state*))
            (log-message :info "ignored: ~a due to no applicable action" path))))))
 
-(defvar *current-dir-children* nil)
+(defvar *current-dir-children* nil
+  "This variable is bound only when applying template of directory index file, to make the entire descendant tree of current directory available in the template.")
+
 (defun find-file (filename)
   (getf
    (find-if #'(lambda (file)
-                (string= (file-namestring (path-identity (getf file :file))) filename))
+                (string= (file-namestring (path-relative (getf file :file))) filename))
             (getf *current-dir-children* :files))
    :obj))
 
 (defun get-files-of-dir (dir-path)
   (let ((dir (find-if #'(lambda (dir)
                           (string= (directory-namestring
-                                    (path-identity (getf dir :dir)))
+                                    (path-relative (getf dir :dir)))
                                    dir-path))
                       (getf *current-dir-children* :dirs))))
     (mapcar #'(lambda (f) (getf f :obj))
@@ -242,13 +245,13 @@
                                       (context-input)))
                (tpl (find-template-for input))
                (output (with-path input
-                         :dir (context-output)
+                         :base (context-output)
                          :filename output-file))
-               (page (if (cl-fad:directory-pathname-p (path-identity input))
+               (page (if (cl-fad:directory-pathname-p (path-relative input))
                          (make-instance 'page
                                         :body ""
                                         :date +date-unknown+
-                                        :path (path-identity output))
+                                        :path (path-relative output))
                          (create-page input output))))
           (when tpl
             (let ((*current-dir-children* children))
@@ -265,7 +268,7 @@
                   ((string= b +date-unknown+) t)
                   (t (string> a b))))
         :key #'(lambda (a)
-                 (let ((obj (getf a :obj)))                  
+                 (let ((obj (getf a :obj)))
                    (if obj
                        (page-date (getf a :obj))
                        +date-unknown+)))))
@@ -327,10 +330,12 @@
                                                   (or prev-output
                                                       (site-content-dir *site*))
                                                   *cwd*))))
-             (log-message :info "Stage ~d~@[ ~a~]:"
+             (log-message :info "Start stage ~d~@[ ~a~]."
                           i (stage-name stage))
              (log-message :debug "stage finished:~% ~s~"
                           (walk (getf *walking-context* :input)))
+             (log-message :info "Stage ~d~@[ ~a~] finished.~%"
+                          i (stage-name stage))
              (setf prev-output (stage-output stage)))))
 
 ;;;; Entry point
@@ -338,7 +343,7 @@
   (sb-ext:disable-debugger)
   (setf *cwd* (uiop/os:getcwd))
   (run-with-args (uiop:command-line-arguments)))
- 
+
 (defun run-with-args (args)
   (cond ((string= (first args) "-init")
 	 ;; TODO: should load configuration file before do-init
