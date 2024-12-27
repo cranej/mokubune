@@ -301,6 +301,7 @@
 (defun visit-directory (name)
   (let ((path (pathname->path name (context-input))))
    (multiple-value-bind (children has-update) (collect-children-of name)
+     ;; TODO: BUG: if the template for indexing changed, should do index-directory
      (when (and (index-config) (not has-update))
        (log-message :info "dir ~a is up to date." path))
      (let ((obj (and has-update

@@ -1,2 +1,2 @@
 (in-package #:mokubune)
-(defparameter *version* "0.5.0")
+(defparameter *version* "0.5.1")

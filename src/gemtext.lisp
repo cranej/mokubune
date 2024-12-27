@@ -154,6 +154,9 @@ Can be a programming language name or alternative text for, e.g., ASCII art.")))
 			     (title-level ele)
 			     (escape-html (line-text ele))
 			     (title-level ele))))
+        ((blockquote-p ele)
+         (write-line (format nil "<blockquote><p>~a</p></blockquote>"
+                             (escape-html (line-text ele)))))
 	((verbatim-p ele)
 	 (write-line (format nil "<pre>~a</pre>" (line-text ele))))))
 
