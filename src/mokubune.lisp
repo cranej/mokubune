@@ -20,10 +20,12 @@
                   :base (context-output)))
            (deps (with-config-file (list path tpl)))
            (page (create-page path out)))
-      (let ((regen (should-regenerate-p out deps)))
+      (let ((regen (deps-outdated-p out deps)))
           (if regen
-              (do-apply-template page tpl out)
-              (log-message :info "skip ~a: up to date." path))
+              (prog1 (do-apply-template page tpl out)
+                (log-message :info "apply template ~a on ~a, output: ~a"
+                             tpl path out))
+              (log-message :debug "skip ~a: up to date." path))
         (values page regen)))))
 
 (defun gemtext->html (input)
@@ -33,7 +35,7 @@
                 :base (site-template-dir *site*)
                 :relative +html-template-file+))
          (deps (with-config-file (list input tpl)))
-         (regen (should-regenerate-p output deps)))
+         (regen (deps-outdated-p output deps)))
     (if regen
         (let* ((doc (with-open-file (s (path->pathname input))
 		      (mokubune/gemtext:parse s)))
@@ -58,23 +60,24 @@
 					           "__content__" html)
 				             tpl-content)
 		          s))
-          (log-message :debug "gemtext->html ~a to ~a" input output))
-        (log-message :info "skip ~a: up to date." input)))
+          (log-message :info "gemtext->html ~a to ~a" input output))
+        (log-message :debug "skip ~a: up to date." input)))
   nil)
 
 (defun rst->html (input)
   (declare (type path input))
   (let* ((out (with-path input :base (context-output) :type "html"))
          (deps (with-config-file (list input)))
-         (regen (should-regenerate-p out deps)))
+         (regen (deps-outdated-p out deps)))
     (if regen
         (progn
           (ensure-directories-exist (path->pathname out))
           (uiop:run-program (list "rst2html5"
                                   "--time"
                                   (namestring (path->pathname input))
-                                  (namestring (path->pathname out)))))
-        (log-message :info "skip ~a: up to date." input))
+                                  (namestring (path->pathname out))))
+          (log-message :info "rst->html ~a to ~a" input out))
+        (log-message :debug "skip ~a: up to date." input))
     nil))
 
 (defun copy (path)
@@ -106,10 +109,13 @@
         (progn
           (ensure-directories-exist dest)
           (uiop:copy-file src dest)
+          (log-message :info "copy ~a to ~a" src dest)
           t)
-        nil)))
+        (progn
+          (log-message :debug "skip ~a: up to date" src)
+          nil))))
 
-(defun should-regenerate-p (out deps)
+(defun deps-outdated-p (out deps)
   (or (not (probe-path out))
       (let ((out-write-date (file-write-date (path->pathname out))))
         (some #'(lambda (dep)
@@ -214,7 +220,7 @@
                             (type-of obj)))
              (push (list :file path :obj obj :updated updated)
                    *walking-state*))
-           (log-message :info "ignored: ~a due to no applicable action" path))))))
+           (log-message :info "skip ~a: no applicable action" path))))))
 
 (defvar *current-dir-children* nil
   "This variable is bound only when applying template of directory index file, to make the entire descendant tree of current directory available in the template.")
@@ -235,7 +241,7 @@
     (mapcar #'(lambda (f) (getf f :obj))
             (sort-files (getf (getf dir :children) :files)))))
 
-(defun index-directory (name children)
+(defun index-directory (name children children-updated)
   (let ((index-config (index-config)))
     (when index-config
       (destructuring-bind (index-file output-file) index-config
@@ -243,22 +249,34 @@
                                            (merge-pathnames* index-file name))
                                           name)
                                       (context-input)))
-               (tpl (find-template-for input))
-               (output (with-path input
-                         :base (context-output)
-                         :filename output-file))
-               (page (if (cl-fad:directory-pathname-p (path-relative input))
-                         (make-instance 'page
-                                        :body ""
-                                        :date +date-unknown+
-                                        :path (path-relative output))
-                         (create-page input output))))
-          (when tpl
-            (let ((*current-dir-children* children))
-              (do-apply-template page tpl output
-                (mapcar #'(lambda (f) (getf f :obj))
-                        (sort-files (getf children :files)))))
-            page))))))
+               (tpl (find-template-for input)))
+          (if tpl
+              (let* ((output (with-path input
+                               :base (context-output)
+                               :filename output-file))
+                     (deps-outdated (deps-outdated-p output (list tpl))))
+                (if (or children-updated deps-outdated)
+                    (let ((*current-dir-children* children)
+                          (page (if (cl-fad:directory-pathname-p (path-relative input))
+                                    (make-instance 'page
+                                                   :body ""
+                                                   :date +date-unknown+
+                                                   :path (path-relative output))
+                                    (create-page input output))))
+                      (do-apply-template page tpl output
+                        (mapcar #'(lambda (f) (getf f :obj))
+                                (sort-files (getf children :files))))
+                      (log-message :info
+                                   "indexing dir ~a by applying template ~a"
+                                   input tpl)
+                      page)
+                    (progn (log-message :debug "skip indexing dir ~a: up to date"
+                                        input)
+                           nil)))
+              (progn (log-message :debug
+                                  "skip indexing dir ~a: no applicable template"
+                                  input)
+                     nil)))))))
 
 (defun sort-files (files)
   "Sort files, files with +date-unknown+ go last."
@@ -301,11 +319,7 @@
 (defun visit-directory (name)
   (let ((path (pathname->path name (context-input))))
    (multiple-value-bind (children has-update) (collect-children-of name)
-     ;; TODO: BUG: if the template for indexing changed, should do index-directory
-     (when (and (index-config) (not has-update))
-       (log-message :info "dir ~a is up to date." path))
-     (let ((obj (and has-update
-                     (index-directory name children))))
+     (let ((obj (index-directory name children has-update)))
        (push (list :dir path
                    :children children
                    :obj obj
@@ -331,11 +345,11 @@
                                                   (or prev-output
                                                       (site-content-dir *site*))
                                                   *cwd*))))
-             (log-message :info "Start stage ~d~@[ ~a~]."
+             (log-message :info "stage ~d~@[ ~a~] started"
                           i (stage-name stage))
              (log-message :debug "stage finished:~% ~s~"
                           (walk (getf *walking-context* :input)))
-             (log-message :info "Stage ~d~@[ ~a~] finished.~%"
+             (log-message :info "stage ~d~@[ ~a~] finished~%"
                           i (stage-name stage))
              (setf prev-output (stage-output stage)))))
 
